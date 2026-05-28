@@ -1,7 +1,27 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import * as Card from "$lib/components/ui/card";
+  import * as Select from "$lib/components/ui/select";
+  import * as Alert from "$lib/components/ui/alert";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
+  import { Textarea } from "$lib/components/ui/textarea";
+  import { Separator } from "$lib/components/ui/separator";
+  import ArrowLeft from "@lucide/svelte/icons/arrow-left";
+  import Loader2 from "@lucide/svelte/icons/loader-2";
+  import Sparkles from "@lucide/svelte/icons/sparkles";
+  import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
 
   type Operation = "echo" | "login" | "grant_permissions" | "revoke" | "commit";
+
+  const OPERATION_LABELS: Record<Operation, string> = {
+    echo: "echo (spike 7)",
+    login: "login (spike 9 manual)",
+    grant_permissions: "grant_permissions (spike 8)",
+    revoke: "revoke",
+    commit: "commit",
+  };
 
   let operation = $state<Operation>("echo");
   let paramsText = $state("{}");
@@ -38,7 +58,9 @@
     errorText = "";
     try {
       let params: unknown = {};
-      try { params = JSON.parse(paramsText); } catch (e) {
+      try {
+        params = JSON.parse(paramsText);
+      } catch (e) {
         errorText = "params is not valid JSON: " + String(e);
         pending = false;
         return;
@@ -55,59 +77,113 @@
   }
 </script>
 
-<main class="container">
-  <nav><a href="/">← Home</a></nav>
-  <h1>Frost wallet bridge — spike harness</h1>
-  <p>Day-1 spikes 7, 8, 10. Pick an operation and click run; the system browser will open to the hosted bridge page; once the callback POSTs back, the result shows below.</p>
+<main class="mx-auto max-w-2xl px-6 py-8 space-y-6">
+  <a href="/" class="text-primary hover:underline inline-flex items-center gap-1 text-sm">
+    <ArrowLeft class="size-4" /> Home
+  </a>
 
-  <form onsubmit={(e) => { e.preventDefault(); run(); }}>
-    <label>
-      Operation:
-      <select bind:value={operation}>
-        <option value="echo">echo (spike 7)</option>
-        <option value="login">login (spike 9 manual)</option>
-        <option value="grant_permissions">grant_permissions (spike 8)</option>
-        <option value="revoke">revoke (stub — Day 6)</option>
-        <option value="commit">commit (stub — Day 6)</option>
-      </select>
-    </label>
+  <div class="space-y-1">
+    <h1 class="text-2xl font-semibold tracking-tight">Frost wallet bridge</h1>
+    <p class="text-muted-foreground text-sm">
+      Spike harness for Day-1 spikes 7, 8, 10. Pick an operation and click <span class="font-medium">Run</span>;
+      the system browser will open to the hosted bridge page. Once the callback POSTs back, the
+      result shows below.
+    </p>
+  </div>
 
-    <label>
-      Params (JSON):
-      <textarea bind:value={paramsText} rows="8"></textarea>
-    </label>
-    <button type="button" onclick={loadSamplePermissionSpec} class="preset-btn">
-      Load sample native-token-stream permission
-    </button>
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Request</Card.Title>
+      <Card.Description>JSON params are forwarded verbatim to the hosted page via <code class="text-xs">?params=</code>.</Card.Description>
+    </Card.Header>
+    <Card.Content>
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          run();
+        }}
+        class="space-y-4"
+      >
+        <div class="space-y-1.5">
+          <Label for="operation">Operation</Label>
+          <Select.Root type="single" bind:value={operation as string}>
+            <Select.Trigger id="operation" class="w-full">
+              {OPERATION_LABELS[operation]}
+            </Select.Trigger>
+            <Select.Content>
+              {#each Object.entries(OPERATION_LABELS) as [value, label] (value)}
+                <Select.Item {value}>{label}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
 
-    <label>
-      Timeout (s):
-      <input type="number" bind:value={timeoutSecs} min="10" max="600" />
-    </label>
+        <div class="space-y-1.5">
+          <Label for="params">Params (JSON)</Label>
+          <Textarea
+            id="params"
+            bind:value={paramsText}
+            rows={8}
+            class="font-mono text-xs"
+            spellcheck={false}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onclick={loadSamplePermissionSpec}
+            class="gap-1.5"
+          >
+            <Sparkles class="size-3.5" />
+            Load sample native-token-stream permission
+          </Button>
+        </div>
 
-    <button type="submit" disabled={pending}>{pending ? "Waiting for browser…" : "Run"}</button>
-  </form>
+        <Separator />
+
+        <div class="space-y-1.5">
+          <Label for="timeout">Timeout (s)</Label>
+          <Input
+            id="timeout"
+            type="number"
+            bind:value={timeoutSecs}
+            min={10}
+            max={600}
+            class="w-32"
+          />
+        </div>
+
+        <Button type="submit" disabled={pending} class="gap-1.5">
+          {#if pending}
+            <Loader2 class="size-4 animate-spin" />
+            Waiting for browser…
+          {:else}
+            Run
+          {/if}
+        </Button>
+      </form>
+    </Card.Content>
+  </Card.Root>
 
   {#if resultText}
-    <h2>Result</h2>
-    <pre>{resultText}</pre>
+    <Card.Root>
+      <Card.Header>
+        <Card.Title>Result</Card.Title>
+      </Card.Header>
+      <Card.Content>
+        <pre
+          class="bg-muted text-muted-foreground overflow-auto rounded-md p-3 text-xs">{resultText}</pre>
+      </Card.Content>
+    </Card.Root>
   {/if}
+
   {#if errorText}
-    <h2>Error</h2>
-    <pre class="err">{errorText}</pre>
+    <Alert.Root variant="destructive">
+      <TriangleAlert />
+      <Alert.Title>Error</Alert.Title>
+      <Alert.Description>
+        <pre class="text-xs whitespace-pre-wrap break-words">{errorText}</pre>
+      </Alert.Description>
+    </Alert.Root>
   {/if}
 </main>
-
-<style>
-  .container { padding: 2rem; font-family: Inter, system-ui, sans-serif; max-width: 720px; margin: 0 auto; }
-  nav { margin-bottom: 1rem; }
-  nav a { color: #646cff; text-decoration: none; }
-  nav a:hover { color: #535bf2; }
-  label { display: block; margin: 0.75rem 0; }
-  textarea, input, select { width: 100%; padding: 0.4rem; font-family: monospace; }
-  pre { background: #111; color: #eee; padding: 0.75rem; border-radius: 6px; overflow: auto; }
-  pre.err { background: #4a1010; color: #ffd7d7; }
-  button { padding: 0.5rem 1rem; }
-  .preset-btn { margin-top: 0.5rem; background: #2a2a2a; color: #ddd; border: 1px solid #444; cursor: pointer; }
-  .preset-btn:hover { background: #3a3a3a; }
-</style>

@@ -12,9 +12,14 @@
   "app": {
     "windows": [
       {
-        "title": "frost",
-        "width": 800,
-        "height": 600
+        "title": "Frost",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 480,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true
       }
     ],
     "security": {
