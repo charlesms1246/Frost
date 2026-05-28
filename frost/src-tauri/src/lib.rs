@@ -1,4 +1,5 @@
 mod key_store;
+mod permission_spec;
 mod wallet_bridge;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -18,6 +19,8 @@ pub fn run() {
             key_store::key_store_get,
             key_store::key_store_delete,
             key_store::key_store_has,
+            permission_spec::build_native_token_stream_permission,
+            permission_spec::build_erc20_token_stream_permission,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

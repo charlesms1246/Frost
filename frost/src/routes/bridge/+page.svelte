@@ -11,6 +11,27 @@
   let resultText = $state("");
   let errorText = $state("");
 
+  // Quick spec presets — call into the Rust permission_spec builders so the
+  // Tauri side stays the single source of truth for the Flask 13.32 schema.
+  async function loadSamplePermissionSpec() {
+    errorText = "";
+    try {
+      const spec = await invoke("build_native_token_stream_permission", {
+        args: {
+          session_account: "0x0000000000000000000000000000000000000001",
+          amount_per_second_hex: "0x1",
+          max_amount_hex: "0x1",
+          expiry_secs: 1800,
+          justification: "Sample spec from /bridge harness",
+        },
+      });
+      operation = "grant_permissions";
+      paramsText = JSON.stringify(spec, null, 2);
+    } catch (e) {
+      errorText = "preset build failed: " + (typeof e === "string" ? e : JSON.stringify(e));
+    }
+  }
+
   async function run() {
     pending = true;
     resultText = "";
@@ -53,8 +74,11 @@
 
     <label>
       Params (JSON):
-      <textarea bind:value={paramsText} rows="4"></textarea>
+      <textarea bind:value={paramsText} rows="8"></textarea>
     </label>
+    <button type="button" onclick={loadSamplePermissionSpec} class="preset-btn">
+      Load sample native-token-stream permission
+    </button>
 
     <label>
       Timeout (s):
@@ -84,4 +108,6 @@
   pre { background: #111; color: #eee; padding: 0.75rem; border-radius: 6px; overflow: auto; }
   pre.err { background: #4a1010; color: #ffd7d7; }
   button { padding: 0.5rem 1rem; }
+  .preset-btn { margin-top: 0.5rem; background: #2a2a2a; color: #ddd; border: 1px solid #444; cursor: pointer; }
+  .preset-btn:hover { background: #3a3a3a; }
 </style>
