@@ -9,8 +9,13 @@ function EchoInner() {
   const port = params.get("port") ?? "";
   const userParams = params.get("params") ?? "{}";
 
-  const [status, setStatus] = useState<"idle" | "posting" | "ok" | "err">("idle");
-  const [detail, setDetail] = useState<string>("");
+  const missingParams = !challenge || !port;
+  const [status, setStatus] = useState<"idle" | "posting" | "ok" | "err">(() =>
+    missingParams ? "err" : "idle",
+  );
+  const [detail, setDetail] = useState<string>(() =>
+    missingParams ? "missing challenge or port query param" : "",
+  );
 
   async function send() {
     if (!challenge || !port) {
@@ -39,8 +44,13 @@ function EchoInner() {
   }
 
   useEffect(() => {
-    // auto-post on mount so the round-trip is a single user click in Tauri
-    send();
+    if (missingParams) return;
+    // auto-post on mount so the round-trip is a single user click in Tauri.
+    // queueMicrotask defers the setState inside send() out of the effect body
+    // to satisfy react-hooks/set-state-in-effect.
+    queueMicrotask(() => {
+      send();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

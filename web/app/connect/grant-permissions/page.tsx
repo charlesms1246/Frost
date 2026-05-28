@@ -92,9 +92,9 @@ function chainName(hex: string): string {
   return `chain ${hex}`;
 }
 
-function PermissionPreview({ req }: { req: PermissionRequest }) {
+function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: number }) {
   const expiry = req.rules.find((r): r is ExpiryRule => r.type === "expiry");
-  const expirySecs = expiry ? expiry.data.timestamp - Math.floor(Date.now() / 1000) : null;
+  const expirySecs = expiry ? expiry.data.timestamp - nowSecs : null;
   const isErc20 = req.permission.type === "erc20-token-stream";
   const data = req.permission.data as Partial<Erc20StreamData>;
 
@@ -135,8 +135,6 @@ function GrantInner() {
   const port = params.get("port") ?? "";
   const rawParams = params.get("params") ?? "";
 
-  const [state, setState] = useState<State>({ kind: "parsing" });
-
   const parsedSpec = useMemo(() => {
     try {
       return { ok: true as const, spec: parseSpec(rawParams) };
@@ -145,12 +143,15 @@ function GrantInner() {
     }
   }, [rawParams]);
 
+  const [state, setState] = useState<State>(() =>
+    parsedSpec.ok
+      ? { kind: "waiting-mm", spec: parsedSpec.spec }
+      : { kind: "spec-error", message: parsedSpec.error },
+  );
+  const [nowSecs] = useState(() => Math.floor(Date.now() / 1000));
+
   useEffect(() => {
-    if (!parsedSpec.ok) {
-      setState({ kind: "spec-error", message: parsedSpec.error });
-      return;
-    }
-    setState({ kind: "waiting-mm", spec: parsedSpec.spec });
+    if (!parsedSpec.ok) return;
     detectMetaMask().then((det) => {
       if (det.kind === "flask-ok") setState({ kind: "ready", spec: parsedSpec.spec, detection: det });
       else setState({ kind: "no-flask", spec: parsedSpec.spec, detection: det });
@@ -225,7 +226,7 @@ function GrantInner() {
         state.kind === "posting" ||
         state.kind === "done") &&
         "spec" in state &&
-        state.spec.map((req, i) => <PermissionPreview key={i} req={req} />)}
+        state.spec.map((req, i) => <PermissionPreview key={i} req={req} nowSecs={nowSecs} />)}
 
       {state.kind === "waiting-mm" && <p>Detecting MetaMask Flask…</p>}
 
