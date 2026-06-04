@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   CAPABILITY_HASH,
   CAVEAT_TYPE,
+  decodeAddressArray,
   decodeBytes32Array,
+  decodeCallableSurface,
+  decodeCommsTemplate,
   decodeUint16,
+  decodeUint64,
   decodeUint256,
   type Caveat,
 } from "@frost/sdk";
@@ -109,6 +113,84 @@ describe("encodeProposedCaveats", () => {
     expect(() =>
       encodeProposedCaveats(decision("x", { slippageToleranceBps: 1.5 })),
     ).toThrow(/slippageToleranceBps/);
+  });
+});
+
+describe("encodeProposedCaveats — structural caveats (Week 3 widening)", () => {
+  const ROUTER = ("0x" + "12".repeat(20)) as Address;
+  const VENICE = ("0x" + "34".repeat(20)) as Address;
+  const SWAP_SELECTOR = "0x12345678" as Hex;
+
+  it("encodes TTL_EXPIRY and decodes back to the same timestamp", () => {
+    const cs = encodeProposedCaveats(decision("executor", { ttlExpiry: 1_900_000_000n }));
+    const ttl = cs.find((c) => c.caveatType === CAVEAT_TYPE.TTL_EXPIRY)!;
+    expect(decodeUint64(ttl)).toBe(1_900_000_000n);
+  });
+
+  it("encodes PROVIDER_WHITELIST", () => {
+    const cs = encodeProposedCaveats(
+      decision("settler", { providerWhitelist: [VENICE, ROUTER] }),
+    );
+    const pw = cs.find((c) => c.caveatType === CAVEAT_TYPE.PROVIDER_WHITELIST)!;
+    expect(decodeAddressArray(pw).map((a) => a.toLowerCase())).toEqual([
+      VENICE.toLowerCase(),
+      ROUTER.toLowerCase(),
+    ]);
+  });
+
+  it("encodes CALLABLE_SURFACE entries", () => {
+    const cs = encodeProposedCaveats(
+      decision("executor", {
+        capabilities: ["CAP_ONCHAIN_EXECUTION"],
+        callableSurface: [{ target: ROUTER, selector: SWAP_SELECTOR, maxValue: 5_000_000n }],
+      }),
+    );
+    const surface = decodeCallableSurface(
+      cs.find((c) => c.caveatType === CAVEAT_TYPE.CALLABLE_SURFACE)!,
+    );
+    expect(surface).toHaveLength(1);
+    expect(surface[0]!.target.toLowerCase()).toBe(ROUTER.toLowerCase());
+    expect(surface[0]!.selector).toBe(SWAP_SELECTOR);
+    expect(surface[0]!.maxValue).toBe(5_000_000n);
+  });
+
+  it("encodes COMMS_TEMPLATE with a verifiable hash binding (I-16)", () => {
+    const cs = encodeProposedCaveats(
+      decision("comms", {
+        capabilities: ["CAP_COMMS_POST"],
+        commsTemplate: {
+          text: "Best rate: ${rate}",
+          variables: [{ name: "rate", source: "numeric" }],
+        },
+      }),
+    );
+    const { templateHash, templateMetadata } = decodeCommsTemplate(
+      cs.find((c) => c.caveatType === CAVEAT_TYPE.COMMS_TEMPLATE)!,
+    );
+    // The decoded metadata round-trips to the template, and the committed hash matches.
+    expect(JSON.parse(Buffer.from(templateMetadata.slice(2), "hex").toString("utf8")).text).toBe(
+      "Best rate: ${rate}",
+    );
+    expect(templateHash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
+  it("rejects a malformed address / selector / empty set", () => {
+    expect(() =>
+      encodeProposedCaveats(decision("x", { providerWhitelist: [] })),
+    ).toThrow(/must not be empty/);
+    expect(() =>
+      encodeProposedCaveats(decision("x", { providerWhitelist: ["0xnope" as Address] })),
+    ).toThrow(/20-byte address/);
+    expect(() =>
+      encodeProposedCaveats(
+        decision("x", {
+          callableSurface: [{ target: ROUTER, selector: "0x1234" as Hex, maxValue: 0n }],
+        }),
+      ),
+    ).toThrow(/4-byte selector/);
+    expect(() =>
+      encodeProposedCaveats(decision("x", { ttlExpiry: -1n })),
+    ).toThrow(/non-negative/);
   });
 });
 

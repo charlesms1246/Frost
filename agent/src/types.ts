@@ -1,4 +1,6 @@
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
+import type { CallableSurfaceEntry } from "@frost/sdk";
+import type { CommsTemplate } from "./compile/types.js";
 
 /**
  * Core types for the Frost master-agent planning runtime.
@@ -88,6 +90,27 @@ export interface ProposedCaveats {
   hitlThreshold?: bigint;
   /** SLIPPAGE_TOLERANCE in basis points. */
   slippageToleranceBps?: number;
+  /**
+   * TTL_EXPIRY — absolute unix seconds the sub-mandate expires at. Typically
+   * derived from the session's expiry by the runtime, not proposed by the LLM.
+   */
+  ttlExpiry?: bigint;
+  /**
+   * PROVIDER_WHITELIST — approved settlement-provider addresses (e.g. Venice).
+   * Config/runtime-supplied; never invented by the LLM.
+   */
+  providerWhitelist?: Address[];
+  /**
+   * CALLABLE_SURFACE — `(target, selector, maxValue)` allow-list for the executor
+   * sub-agent. Addresses + selectors come from the known router allowlist / the
+   * compiled workflow, NOT from the LLM (which must never invent on-chain targets).
+   */
+  callableSurface?: CallableSurfaceEntry[];
+  /**
+   * COMMS_TEMPLATE — single-channel comms binding for the comms sub-agent. Sourced
+   * from the compiled session spec (the user reviewed + signed it), not the LLM.
+   */
+  commsTemplate?: CommsTemplate;
 }
 
 /** A sub-agent the planner's LLM proposed spawning. */

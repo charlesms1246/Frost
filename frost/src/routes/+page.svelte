@@ -15,6 +15,7 @@
   <h1>Welcome to Tauri + Svelte</h1>
 
   <nav class="nav">
+    <a href="/dashboard" class="nav-btn">Open dashboard</a>
     <a href="/bridge" class="nav-btn">Wallet bridge (spikes 7 / 8 / 10)</a>
   </nav>
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { TauriKeyStore } from "$lib/key-store";
   import * as Card from "$lib/components/ui/card";
   import * as Select from "$lib/components/ui/select";
   import * as Alert from "$lib/components/ui/alert";
@@ -73,6 +74,35 @@
       errorText = typeof e === "string" ? e : JSON.stringify(e, null, 2);
     } finally {
       pending = false;
+    }
+  }
+
+  // Exercises the OS-vault roundtrip through TauriKeyStore (set/has/get/delete)
+  // against a throwaway key id. This is the only frontend check of the keyring
+  // commands; run it under `npm run tauri dev`, not the browser-only dev server.
+  let keyStoreResult = $state("");
+  async function testKeyStore() {
+    keyStoreResult = "running…";
+    const ks = new TauriKeyStore();
+    const id = `selftest:${crypto.randomUUID()}`;
+    const secret = "0x" + "ab".repeat(32);
+    const steps: string[] = [];
+    try {
+      await ks.set(id, secret);
+      steps.push("set → ok");
+      const has1 = await ks.has(id);
+      steps.push(`has → ${has1}`);
+      const got = await ks.get(id);
+      steps.push(`get matches → ${got === secret}`);
+      await ks.delete(id);
+      const has2 = await ks.has(id);
+      steps.push(`has after delete → ${has2}`);
+      const gone = await ks.get(id);
+      steps.push(`get after delete → ${gone === null ? "null" : "UNEXPECTED"}`);
+      const pass = has1 && got === secret && !has2 && gone === null;
+      keyStoreResult = `${pass ? "PASS" : "FAIL"}\n${steps.join("\n")}`;
+    } catch (e) {
+      keyStoreResult = `ERROR: ${e instanceof Error ? e.message : String(e)}\n${steps.join("\n")}`;
     }
   }
 </script>
@@ -162,6 +192,25 @@
           {/if}
         </Button>
       </form>
+    </Card.Content>
+  </Card.Root>
+
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>KeyStore self-test</Card.Title>
+      <Card.Description>
+        Roundtrips a throwaway key through the OS vault via <code class="text-xs">TauriKeyStore</code>
+        (the <code class="text-xs">key_store_*</code> commands). Requires <code class="text-xs">npm run tauri dev</code>.
+      </Card.Description>
+    </Card.Header>
+    <Card.Content class="space-y-3">
+      <Button type="button" variant="secondary" size="sm" onclick={testKeyStore}>
+        Run KeyStore roundtrip
+      </Button>
+      {#if keyStoreResult}
+        <pre
+          class="bg-muted text-muted-foreground overflow-auto rounded-md p-3 text-xs">{keyStoreResult}</pre>
+      {/if}
     </Card.Content>
   </Card.Root>
 

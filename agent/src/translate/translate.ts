@@ -23,6 +23,16 @@ import type { PlanningEntry, PlanResult, SpawnDecision } from "../types.js";
  */
 export type CaveatEncoder = (decision: SpawnDecision) => readonly Caveat[];
 
+/**
+ * Enrich an approved decision with the role-appropriate STRUCTURAL caveats
+ * (CALLABLE_SURFACE, PROVIDER_WHITELIST, COMMS_TEMPLATE, TTL_EXPIRY) drawn from
+ * the signed session spec + config — never the LLM. Optional seam; implemented by
+ * `orchestrate/enrich.ts`'s `makeEnricher`. Runs per-decision inside the issuance
+ * try/catch, so a misconfigured spawn (e.g. a comms role with no template) fails
+ * just itself, not the batch (§10.5).
+ */
+export type DecisionEnricher = (decision: SpawnDecision) => SpawnDecision;
+
 /** Resolve (or provision) the wallet address that will hold this sub-mandate. */
 export type HolderProvisioner = (decision: SpawnDecision) => Promise<Address>;
 
@@ -42,6 +52,12 @@ export interface TranslateDeps {
   encodeCaveats: CaveatEncoder;
   provisionHolder: HolderProvisioner;
   nextNonce: NonceSource;
+  /**
+   * Optional: attach the session's structural caveats per role before encoding.
+   * When omitted, decisions are issued exactly as the planner approved them
+   * (back-compat). See {@link DecisionEnricher}.
+   */
+  enrich?: DecisionEnricher;
 }
 
 export type SpawnStatus = "issued" | "failed";
@@ -87,8 +103,11 @@ export async function translatePlan(
 
   for (const decision of plan.approved) {
     try {
-      const holder = await deps.provisionHolder(decision);
-      const caveats = deps.encodeCaveats(decision);
+      // Attach the session's structural caveats (addresses/selectors/template/TTL)
+      // before encoding — sourced from the signed spec + config, never the LLM.
+      const enriched = deps.enrich ? deps.enrich(decision) : decision;
+      const holder = await deps.provisionHolder(enriched);
+      const caveats = deps.encodeCaveats(enriched);
       const nonce = deps.nextNonce();
       const { mandateId, txHash } = await deps.issue({
         parentMandateId,

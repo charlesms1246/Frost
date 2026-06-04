@@ -1,0 +1,23 @@
+import { defineConfig } from "vitest/config";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { resolve } from "node:path";
+
+/**
+ * Vitest config for the frost webview's embedding tests. Maps the `$lib` alias the
+ * SvelteKit app uses so the embedding modules import the same way as in the app.
+ * These tests run in Node with every external boundary (OpenRouter / Venice /
+ * Discord `fetch`, Tauri `invoke`) mocked — no GUI, no network.
+ *
+ * The svelte plugin compiles `.svelte.ts` rune modules (e.g. the dashboard store) so
+ * `$state` resolves; `conditions: ["browser"]` makes the runes use the client runtime.
+ */
+export default defineConfig({
+  plugins: [svelte()],
+  resolve: {
+    alias: { $lib: resolve(__dirname, "src/lib") },
+    conditions: ["browser"],
+  },
+  test: {
+    include: ["src/**/*.{test,e2e.test}.ts"],
+  },
+});

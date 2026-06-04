@@ -1,38 +1,14 @@
-export * from "./types.js";
-export * from "./inference/openrouter.js";
-export {
-  buildPlanningPrompt,
-  parsePlannerOutput,
-  PLANNING_PROMPT_VERSION,
-  type PlannerOutput,
-  type PromptInput,
-} from "./planner/prompt.js";
-export { Planner, type PlanInput, type PlannerConfig } from "./planner/planner.js";
-export {
-  translatePlan,
-  nonceCounter,
-  makeSdkIssuer,
-  type CaveatEncoder,
-  type HolderProvisioner,
-  type NonceSource,
-  type SubMandateIssuer,
-  type TranslateDeps,
-  type SpawnStatus,
-  type SpawnOutcome,
-  type TranslateResult,
-} from "./translate/translate.js";
-export {
-  encodeProposedCaveats,
-  defaultCaveatEncoder,
-} from "./translate/caveat-encoder.js";
-export { type KeyStore, InMemoryKeyStore } from "./wallet/key-store.js";
-export {
-  WalletProvisioner,
-  type WalletKind,
-  type WalletHandle,
-  type ServerWalletProvider,
-  type WalletProvisionerOptions,
-} from "./wallet/provisioner.js";
+/**
+ * Default (Node) barrel for `@frost/agent`: the full browser-safe surface
+ * (`./browser.js`) PLUS the two Node-only 1Shot-backed modules. Node consumers
+ * (tests, a future sidecar) import from here; the webview embedding imports
+ * `@frost/agent/browser` to keep `@1shotapi/client-sdk` out of the bundle.
+ */
+export * from "./browser.js";
+
+// --- Node-only: 1Shot SDK-backed implementations (the live-write path) ---------
+// (OneShotTransactionSubmitter + OneShotRestMethods are browser-safe — exported
+// from ./browser.js — since they hit the 1Shot REST API directly, not via the SDK.)
 export {
   OneShotServerWalletProvider,
   oneShotProviderFromEnv,
