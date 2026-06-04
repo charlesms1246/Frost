@@ -7,6 +7,7 @@
   import { createLiveRootMandate, liveSdkIssuer } from "$lib/agent/live";
   import { makeSimulatedExecutorRunner } from "$lib/agent/executor-runner";
   import { revocableIssuer, liveRevoke } from "$lib/agent/revocation";
+  import { liveCommitAudit, auditRegistryConfigured } from "$lib/agent/audit-commit";
   import { TauriKeyStore } from "$lib/key-store";
   import {
     Compiler,
@@ -97,6 +98,9 @@
     review = [];
     transportRef = undefined;
     switcher = undefined;
+    commitTx = undefined;
+    commitSimulated = false;
+    commitError = undefined;
     activeTab = "setup";
   }
 
@@ -140,6 +144,40 @@
     a.download = `frost-receipt-${receipt.sessionId.slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  // --- on-chain commit of the audit root (§10.8) ---
+  let committing = $state(false);
+  let commitTx = $state<string | undefined>(undefined);
+  let commitSimulated = $state(false);
+  let commitError = $state<string | undefined>(undefined);
+
+  async function commitAudit() {
+    if (!receipt || committing) return;
+    committing = true;
+    commitError = undefined;
+    try {
+      const sessionEnd = BigInt(Math.floor(Date.now() / 1000));
+      if (sessionKey.trim() && auditRegistryConfigured()) {
+        const pk = (sessionKey.startsWith("0x") ? sessionKey : "0x" + sessionKey) as `0x${string}`;
+        commitTx = await liveCommitAudit({
+          sessionPrivateKey: pk,
+          rpcUrl,
+          sessionId: receipt.sessionId,
+          merkleRoot: receipt.merkleRoot,
+          sessionEnd,
+        });
+        commitSimulated = false;
+      } else {
+        // No funded key or AuditRegistry not deployed yet → simulate the anchor.
+        commitTx = receipt.merkleRoot;
+        commitSimulated = true;
+      }
+    } catch (e) {
+      commitError = e instanceof Error ? e.message : String(e);
+    } finally {
+      committing = false;
+    }
   }
 
   // --- compile state (the Setup → review → sign flow) ---
@@ -568,9 +606,29 @@
                     <div>{receipt.entries.length}</div>
                   </div>
                 </div>
-                <Button variant="outline" size="sm" class="w-fit" onclick={downloadReceipt}>
-                  Download receipt JSON
-                </Button>
+                <div class="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="sm" onclick={downloadReceipt}>
+                    Download receipt JSON
+                  </Button>
+                  <Button size="sm" onclick={commitAudit} disabled={committing || !!commitTx}>
+                    {#if committing}<Loader2 class="mr-1 size-3 animate-spin" />{/if}
+                    {commitTx ? "Committed" : "Commit on-chain"}
+                  </Button>
+                </div>
+                {#if commitTx}
+                  <div class="rounded-lg border bg-card p-2 text-xs">
+                    {#if commitSimulated}
+                      <span class="text-muted-foreground">Simulated anchor (no funded session key / AuditRegistry not deployed). Root:</span>
+                      <span class="font-mono break-all">{commitTx}</span>
+                    {:else}
+                      <span class="text-muted-foreground">Anchored on Base Sepolia:</span>
+                      <a class="font-mono text-primary underline" href={`https://sepolia.basescan.org/tx/${commitTx}`} target="_blank" rel="noreferrer">{shortHash(commitTx)}</a>
+                    {/if}
+                  </div>
+                {/if}
+                {#if commitError}
+                  <p class="text-xs text-destructive">Commit failed: {commitError}</p>
+                {/if}
               </Card.Content>
             </Card.Root>
 

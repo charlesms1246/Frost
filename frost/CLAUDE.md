@@ -82,8 +82,12 @@ never enters the Vite bundle. The default `@frost/agent` barrel would break `vit
   over the session audit trail via the agent runtime's `buildReceipt(store.receiptInput)`
   (`agent/src/audit/receipt.ts`), with an audit-entry table (per-leaf hashes) and a downloadable
   proof-bearing JSON. The Merkle is commutative/sorted-pair (OZ-style) so any entry's inclusion is
-  verifiable (`merkleProof`/`verifyMerkleProof`). NOTE: the **on-chain anchor is not built** — no
-  audit/commitment contract is deployed; the root is surfaced "ready to commit," not anchored.
+  verifiable (`merkleProof`/`verifyMerkleProof`). A **"Commit on-chain" button**
+  (`src/lib/agent/audit-commit.ts` → SDK `audit.commit` → the `AuditRegistry` contract) anchors
+  the root via the funded session key (BaseScan tx link), or SIMULATES the anchor when no key /
+  the registry address is unset. **Deploy step owed:** `AuditRegistry` must be deployed and its
+  address set in `@frost/sdk`'s `FROST_BASE_SEPOLIA.auditRegistry` (zero until then) — see
+  `DEPLOYED_CONTRACTS.md` / `ERRORS.MD`.
 
 Keys: `D:\Frost\.env` (copied from `spikes/.env`, gitignored) holds OpenRouter/Venice/1Shot creds
 and the funded `BASE_SEPOLIA_PK` for live runs.
