@@ -10,8 +10,8 @@
 	data-tauri-drag-region
 >
 	<div class="left" data-tauri-drag-region>
-		<img src="/frost-icon.svg" alt="Frost" class="logo" data-tauri-drag-region />
-		<span class="title" data-tauri-drag-region>frost</span>
+		<img src="/frost-icon.svg" alt="FROST" class="logo" data-tauri-drag-region />
+		<!-- <span class="title" data-tauri-drag-region>FROST</span> -->
 	</div>
 
 	<div class="right">
@@ -51,6 +51,7 @@
 		display: block;
 	}
 	.title {
+		font-family: 'Frost Display', var(--font-sans);
 		font-size: 12px;
 		font-weight: 500;
 		letter-spacing: 0.02em;

@@ -1,23 +1,24 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { AgentSessionStore } from "$lib/stores/agent-session.svelte";
+  import { config, fallbackKeyOf } from "$lib/stores/config.svelte";
+  import { handoff } from "$lib/stores/handoff.svelte";
   import DelegationTree from "$lib/components/dashboard/DelegationTree.svelte";
   import ActivityLog from "$lib/components/dashboard/ActivityLog.svelte";
   import { createEmbeddedSession } from "$lib/agent/session";
   import { eoaProvisioner, simulatedIssuer } from "$lib/agent/holders";
-  import { createLiveRootMandate, liveSdkIssuer } from "$lib/agent/live";
   import { makeSimulatedExecutorRunner } from "$lib/agent/executor-runner";
-  import { revocableIssuer, liveRevoke } from "$lib/agent/revocation";
-  import { liveCommitAudit, auditRegistryConfigured } from "$lib/agent/audit-commit";
+  import { revocableIssuer } from "$lib/agent/revocation";
+  import { buildTransport } from "$lib/agent/transport";
   import { TauriKeyStore } from "$lib/key-store";
+  import { customAgents, toDefinition } from "$lib/stores/custom-agents.svelte";
   import {
     Compiler,
     renderSpec,
-    OpenRouterClient,
-    VeniceInferenceClient,
-    SwitchingInferenceTransport,
     sessionContextFrom,
     BASE_SEPOLIA_DEPLOYMENT,
     buildReceipt,
+    CustomAgentRegistry,
   } from "@frost/agent/browser";
   import type {
     CompiledSpec,
@@ -25,11 +26,11 @@
     SubMandateIssuer,
     SubAgentRunner,
     InferenceTransport,
+    SwitchingInferenceTransport,
     SessionReceipt,
   } from "@frost/agent/browser";
   import HitlGate from "$lib/components/dashboard/HitlGate.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Badge } from "$lib/components/ui/badge";
@@ -37,32 +38,25 @@
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Play from "@lucide/svelte/icons/play";
   import Plus from "@lucide/svelte/icons/plus";
+  import Settings2 from "@lucide/svelte/icons/settings-2";
 
   const store = new AgentSessionStore();
 
-  type Tab = "setup" | "tree" | "activity" | "receipt";
-  let activeTab = $state<Tab>("setup");
+  type Tab = "workflow" | "tree" | "activity" | "receipt";
+  let activeTab = $state<Tab>("workflow");
   const TABS: { id: Tab; label: string }[] = [
-    { id: "setup", label: "Setup" },
+    { id: "workflow", label: "Workflow" },
     { id: "tree", label: "Tree" },
     { id: "activity", label: "Activity" },
     { id: "receipt", label: "Receipt" },
   ];
 
-  // --- credentials & controls ---
-  let openRouterApiKey = $state("");
-  let model = $state("openai/gpt-4o-mini");
-  let veniceApiKey = $state("");
-  let veniceInferenceApiKey = $state("");
-  let veniceInferenceModel = $state("llama-3.3-70b");
-  let primaryBudgetStr = $state("3");
+  // Runtime kill switch for the Venice paid path (not persisted config).
   let primaryEnabled = $state(true);
-  let discordWebhookUrl = $state("");
+
   let workflow = $state(
     "Compare WETH→USDC quotes across DEXes and report the best rate to Discord.",
   );
-  let sessionKey = $state("");
-  let rpcUrl = $state("https://base-sepolia.publicnode.com");
 
   // Executor (HITL demo): when on, a spawned executor runs the real preflight + HITL
   // gate against a simulated swap of this notional. Above the HITL threshold ⇒ it pauses.
@@ -71,20 +65,12 @@
   let testingHitl = $state(false);
   let revoking = $state(false);
 
-  /** Demo moment 3: revoke the master's spawning authority (on-chain when live). */
-  async function revoke() {
+  /** Demo moment 3: revoke the master's spawning authority (simulated — live 1Shot path lands later). */
+  function revoke() {
     if (store.spawningRevoked || revoking) return;
     revoking = true;
     try {
-      if (sessionKey.trim() && store.master.rootMandateId) {
-        const pk = (sessionKey.startsWith("0x") ? sessionKey : "0x" + sessionKey) as `0x${string}`;
-        const tx = await liveRevoke({ sessionPrivateKey: pk, rpcUrl, mandateId: store.master.rootMandateId as `0x${string}` });
-        store.markSpawningRevoked(tx);
-      } else {
-        store.markSpawningRevoked();
-      }
-    } catch (e) {
-      store.markError(`revoke failed: ${e instanceof Error ? e.message : String(e)}`);
+      store.markSpawningRevoked();
     } finally {
       revoking = false;
     }
@@ -101,13 +87,27 @@
     commitTx = undefined;
     commitSimulated = false;
     commitError = undefined;
-    activeTab = "setup";
+    activeTab = "workflow";
   }
 
   function execNotional(): bigint {
     const n = Number.parseFloat(execNotionalStr);
     return BigInt(Math.round((Number.isFinite(n) ? n : 0) * 1e6));
   }
+  /** Saved custom agents → a registry the planner can spawn from (proper agents). */
+  function buildRegistry(): CustomAgentRegistry | undefined {
+    if (customAgents.list.length === 0) return undefined;
+    const reg = new CustomAgentRegistry();
+    for (const a of customAgents.list) {
+      try {
+        reg.register(toDefinition(a));
+      } catch {
+        /* skip invalid stored agent */
+      }
+    }
+    return reg;
+  }
+
   function buildExecutorRunner(spec: CompiledSpec): SubAgentRunner {
     const context = sessionContextFrom(spec, BASE_SEPOLIA_DEPLOYMENT);
     return makeSimulatedExecutorRunner({
@@ -146,7 +146,7 @@
     URL.revokeObjectURL(url);
   }
 
-  // --- on-chain commit of the audit root (§10.8) ---
+  // --- audit anchor (§10.8). Live anchoring uses the custodial signing wallet (later); simulate for now. ---
   let committing = $state(false);
   let commitTx = $state<string | undefined>(undefined);
   let commitSimulated = $state(false);
@@ -157,22 +157,10 @@
     committing = true;
     commitError = undefined;
     try {
-      const sessionEnd = BigInt(Math.floor(Date.now() / 1000));
-      if (sessionKey.trim() && auditRegistryConfigured()) {
-        const pk = (sessionKey.startsWith("0x") ? sessionKey : "0x" + sessionKey) as `0x${string}`;
-        commitTx = await liveCommitAudit({
-          sessionPrivateKey: pk,
-          rpcUrl,
-          sessionId: receipt.sessionId,
-          merkleRoot: receipt.merkleRoot,
-          sessionEnd,
-        });
-        commitSimulated = false;
-      } else {
-        // No funded key or AuditRegistry not deployed yet → simulate the anchor.
-        commitTx = receipt.merkleRoot;
-        commitSimulated = true;
-      }
+      // No raw key in the client — anchor is simulated until the custodial
+      // signing wallet path is wired.
+      commitTx = receipt.merkleRoot;
+      commitSimulated = true;
     } catch (e) {
       commitError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -180,7 +168,7 @@
     }
   }
 
-  // --- compile state (the Setup → review → sign flow) ---
+  // --- compile state (NL workflow → reviewable, signable spec) ---
   let compileResult = $state<CompileResult | undefined>(undefined);
   let compiledSpec = $state<CompiledSpec | undefined>(undefined);
   let review = $state<string[]>([]);
@@ -191,27 +179,26 @@
     switcher?.setPrimaryEnabled(primaryEnabled);
   }
 
-  /** Build the shared thinking transport ONCE, so the Venice budget spans compile + planning. */
+  /**
+   * Build the shared thinking transport ONCE (Venice x402 primary → OpenRouter/Groq
+   * fallback) from config, so the Venice budget spans compile + planning.
+   */
   function ensureTransport(): InferenceTransport {
     if (transportRef) return transportRef;
-    const openRouter = new OpenRouterClient({ apiKey: openRouterApiKey, model });
-    if (!veniceInferenceApiKey) {
-      transportRef = openRouter;
-      switcher = undefined;
-      return transportRef;
-    }
-    const venice = new VeniceInferenceClient({ apiKey: veniceInferenceApiKey, model: veniceInferenceModel });
-    const budget = Number.parseInt(primaryBudgetStr, 10);
-    switcher = new SwitchingInferenceTransport({
-      primary: venice,
-      fallback: openRouter,
-      primaryCallBudget: Number.isFinite(budget) ? budget : 3,
-      primaryEnabled,
-      onRoute: (i) => store.onRoute(i),
-    });
-    transportRef = switcher;
+    const built = buildTransport({ primaryEnabled, onRoute: (i) => store.onRoute(i) });
+    transportRef = built.transport;
+    switcher = built.switcher;
     return transportRef;
   }
+
+  // Hand-off from the master-agent chat: prefill the workflow and auto-compile.
+  onMount(() => {
+    const w = handoff.take();
+    if (w) {
+      workflow = w;
+      if (config.ready) compile();
+    }
+  });
 
   function safeRender(spec: CompiledSpec): string[] {
     try {
@@ -221,12 +208,15 @@
     }
   }
 
-  /** Compile the NL workflow → reviewable, signable spec (the demo's opening). */
+  /** Compile the NL workflow → reviewable, signable spec. */
   async function compile() {
     compiling = true;
     try {
       const transport = ensureTransport();
-      const result = await new Compiler({ transport, model }).compile({ description: workflow, answers });
+      const result = await new Compiler({ transport, model: config.primaryModel }).compile({
+        description: workflow,
+        answers,
+      });
       compileResult = result;
       compiledSpec = result.spec;
       review = result.escalateToHITL ? [] : safeRender(result.spec);
@@ -263,33 +253,25 @@
     activeTab = "tree"; // snap to the camera anchor while agents are live
     try {
       const transport = ensureTransport();
-      let inner: SubMandateIssuer;
-      let rootMandateId = (store.master.rootMandateId as `0x${string}` | undefined) ?? (("0x" + "b".repeat(64)) as `0x${string}`);
-
-      if (store.spawningRevoked) {
-        // Spawning authority revoked — the wrapper refuses below; don't touch the chain.
-        inner = simulatedIssuer();
-      } else if (sessionKey.trim()) {
-        const pk = (sessionKey.startsWith("0x") ? sessionKey : "0x" + sessionKey) as `0x${string}`;
-        const root = await createLiveRootMandate({ sessionPrivateKey: pk, rpcUrl, spec });
-        rootMandateId = root.rootMandateId;
-        store.master.rootMandateId = root.rootMandateId;
-        inner = liveSdkIssuer({ sessionPrivateKey: pk, rpcUrl });
-      } else {
-        inner = simulatedIssuer();
-      }
+      // Issuance is simulated in the client (no raw key). The live path uses the
+      // custodial signing wallet and lands in a later round.
+      const inner: SubMandateIssuer = simulatedIssuer();
+      const rootMandateId = (store.master.rootMandateId as `0x${string}` | undefined) ??
+        (("0x" + "b".repeat(64)) as `0x${string}`);
       // Once revoked, every spawn attempt fails before any chain write (the cascade).
       const issue = revocableIssuer(inner, () => store.spawningRevoked);
 
+      const registry = buildRegistry();
       const { session } = createEmbeddedSession({
         spec,
         sessionId: ("0x" + "a".repeat(64)) as `0x${string}`,
         rootMandateId,
-        openRouterApiKey,
-        model,
-        veniceApiKey,
+        openRouterApiKey: fallbackKeyOf(config.value),
+        model: config.primaryModel,
+        veniceApiKey: config.value.veniceApiKey,
         inferenceTransport: transport,
-        discordWebhookUrl: discordWebhookUrl || undefined,
+        discordWebhookUrl: config.value.discordWebhookUrl || undefined,
+        ...(registry ? { registry } : {}),
         ...(enableExecutor ? { executorRunner: buildExecutorRunner(spec) } : {}),
         issue,
         provisionHolder: eoaProvisioner(new TauriKeyStore()),
@@ -395,7 +377,7 @@
         {:else}
           <Badge variant="ghost" class="text-[10px] text-muted-foreground">sample spec</Badge>
         {/if}
-        <Button size="sm" class="h-7" onclick={run} disabled={pending || compiling || !openRouterApiKey || (compileResult?.escalateToHITL ?? false)}>
+        <Button size="sm" class="h-7" onclick={run} disabled={pending || compiling || !config.ready || (compileResult?.escalateToHITL ?? false)}>
           {#if pending}<Loader2 class="mr-1 size-3.5 animate-spin" />{:else}<Play class="mr-1 size-3.5" />{/if}
           Run cycle
         </Button>
@@ -403,15 +385,22 @@
     </div>
 
     <div class="flex-1 overflow-y-auto p-4">
-      {#if activeTab === "setup"}
+      {#if activeTab === "workflow"}
         <div class="mx-auto flex max-w-xl flex-col gap-3">
+          {#if !config.ready}
+            <div class="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+              <span>Finish configuration (an OpenRouter key + a primary model) before running.</span>
+              <Button href="/setup" size="sm" variant="secondary"><Settings2 class="size-3.5" /> Open setup</Button>
+            </div>
+          {/if}
+
           <div class="grid gap-1.5">
             <Label for="wf">Workflow (natural language)</Label>
             <Textarea id="wf" rows={3} bind:value={workflow} />
           </div>
 
           <div class="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onclick={compile} disabled={compiling || !openRouterApiKey || !workflow.trim()}>
+            <Button variant="secondary" size="sm" onclick={compile} disabled={compiling || !config.ready || !workflow.trim()}>
               {#if compiling}<Loader2 class="mr-1 size-3.5 animate-spin" />{/if}
               Compile workflow
             </Button>
@@ -468,11 +457,11 @@
                 <Card.Root>
                   <Card.Header class="pb-2"><Card.Title class="text-sm">A few questions before signing</Card.Title></Card.Header>
                   <Card.Content class="flex flex-col gap-2">
-                    {#each compileResult.clarifications as c (c.field)}
+                    {#each compileResult.clarifications as cl (cl.field)}
                       <div class="grid gap-1">
-                        <Label for={"clar-" + c.field} class="text-xs">{c.question}</Label>
-                        <Input id={"clar-" + c.field} bind:value={answers[c.field]} />
-                        <p class="text-[10px] text-muted-foreground">{c.reason}</p>
+                        <Label for={"clar-" + cl.field} class="text-xs">{cl.question}</Label>
+                        <input id={"clar-" + cl.field} class="rounded-md border bg-input/30 px-2 py-1 text-xs" bind:value={answers[cl.field]} />
+                        <p class="text-[10px] text-muted-foreground">{cl.reason}</p>
                       </div>
                     {/each}
                     <Button size="sm" variant="secondary" onclick={compile} disabled={compiling}>Re-compile with answers</Button>
@@ -484,65 +473,16 @@
             {/if}
           {/if}
 
-          <div class="grid gap-1.5">
-            <Label for="or">OpenRouter API key (thinking / fallback)</Label>
-            <Input id="or" type="password" bind:value={openRouterApiKey} placeholder="sk-or-…" />
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="grid gap-1.5">
-              <Label for="model">Model</Label>
-              <Input id="model" bind:value={model} />
-            </div>
-            <div class="grid gap-1.5">
-              <Label for="vmodel">Venice model</Label>
-              <Input id="vmodel" bind:value={veniceInferenceModel} />
-            </div>
-          </div>
-
-          <Card.Root>
-            <Card.Header class="pb-2">
-              <Card.Title class="text-sm">Paid inference (Venice x402) — budget guard</Card.Title>
-              <Card.Description class="text-xs">
-                Route the first N calls through Venice (paid), then auto-switch to OpenRouter so
-                the small Venice balance is never overspent. The kill switch forces OpenRouter now.
-              </Card.Description>
-            </Card.Header>
-            <Card.Content class="flex flex-col gap-3">
-              <div class="grid gap-1.5">
-                <Label for="vkey">Venice inference key (optional)</Label>
-                <Input id="vkey" type="password" bind:value={veniceInferenceApiKey} placeholder="empty ⇒ OpenRouter only" />
+          <!-- Paid inference (Venice x402) runtime kill switch — keys live in Setup. -->
+          {#if config.value.veniceApiKey}
+            <div class="flex items-center justify-between rounded-lg border bg-card p-3 text-xs">
+              <div>
+                <p class="font-medium">Paid inference (Venice x402)</p>
+                <p class="text-muted-foreground">{store.routes.venice} paid · {store.routes.openrouter} fallback</p>
               </div>
-              <div class="flex items-end gap-3">
-                <div class="grid w-28 gap-1.5">
-                  <Label for="budget">Venice calls</Label>
-                  <Input id="budget" type="number" min="0" bind:value={primaryBudgetStr} />
-                </div>
-                <Button variant={primaryEnabled ? "default" : "outline"} size="sm" onclick={toggleVenice}>
-                  Venice {primaryEnabled ? "ON" : "OFF"}
-                </Button>
-                <span class="text-xs text-muted-foreground">
-                  {store.routes.venice} paid · {store.routes.openrouter} fallback
-                </span>
-              </div>
-            </Card.Content>
-          </Card.Root>
-
-          <div class="grid gap-1.5">
-            <Label for="venice">Venice RPC key (pricer / monitor reads)</Label>
-            <Input id="venice" type="password" bind:value={veniceApiKey} />
-          </div>
-          <div class="grid gap-1.5">
-            <Label for="discord">Discord webhook (optional)</Label>
-            <Input id="discord" bind:value={discordWebhookUrl} placeholder="https://discord.com/api/webhooks/…" />
-          </div>
-          <div class="grid gap-1.5">
-            <Label for="sk">Session key — LIVE issuance on Base Sepolia (optional)</Label>
-            <Input id="sk" type="password" bind:value={sessionKey} placeholder="empty ⇒ simulated; funded key ⇒ real root + sub mandates" />
-          </div>
-          {#if sessionKey.trim()}
-            <div class="grid gap-1.5">
-              <Label for="rpc">Base Sepolia RPC</Label>
-              <Input id="rpc" bind:value={rpcUrl} />
+              <Button variant={primaryEnabled ? "default" : "outline"} size="sm" onclick={toggleVenice}>
+                Venice {primaryEnabled ? "ON" : "OFF"}
+              </Button>
             </div>
           {/if}
 
@@ -561,7 +501,7 @@
                 </Button>
                 <div class="grid w-32 gap-1.5">
                   <Label for="notional">Swap notional (USDC)</Label>
-                  <Input id="notional" type="number" min="0" step="0.01" bind:value={execNotionalStr} />
+                  <input id="notional" type="number" min="0" step="0.01" class="rounded-md border bg-input/30 px-2 py-1 text-xs" bind:value={execNotionalStr} />
                 </div>
                 <Button variant="secondary" size="sm" onclick={testHitl} disabled={testingHitl || pending}>
                   {#if testingHitl}<Loader2 class="mr-1 size-3.5 animate-spin" />{/if}
@@ -582,13 +522,12 @@
       {:else if activeTab === "receipt"}
         {#if receipt}
           <div class="flex flex-col gap-3">
-            <!-- The closing shot: a 32-byte Merkle commitment over the session's audit trail. -->
             <Card.Root>
               <Card.Header class="pb-2">
                 <Card.Title class="text-sm">Session audit commitment</Card.Title>
                 <Card.Description class="text-xs">
                   Merkle root over the full session trail (§10.8). Tamper-evident: any altered
-                  entry breaks the root. On-chain anchoring via the commitment service is the next seam.
+                  entry breaks the root. On-chain anchoring via the custodial signing wallet lands next.
                 </Card.Description>
               </Card.Header>
               <Card.Content class="flex flex-col gap-2">
@@ -617,13 +556,8 @@
                 </div>
                 {#if commitTx}
                   <div class="rounded-lg border bg-card p-2 text-xs">
-                    {#if commitSimulated}
-                      <span class="text-muted-foreground">Simulated anchor (no funded session key / AuditRegistry not deployed). Root:</span>
-                      <span class="font-mono break-all">{commitTx}</span>
-                    {:else}
-                      <span class="text-muted-foreground">Anchored on Base Sepolia:</span>
-                      <a class="font-mono text-primary underline" href={`https://sepolia.basescan.org/tx/${commitTx}`} target="_blank" rel="noreferrer">{shortHash(commitTx)}</a>
-                    {/if}
+                    <span class="text-muted-foreground">Simulated anchor (signing wallet path lands next). Root:</span>
+                    <span class="font-mono break-all">{commitTx}</span>
                   </div>
                 {/if}
                 {#if commitError}
@@ -686,7 +620,7 @@
         </div>
       </div>
       <div class="mt-2 flex flex-wrap gap-1">
-        <Badge variant="outline" class="text-[10px]">{model}</Badge>
+        <Badge variant="outline" class="text-[10px]">{config.primaryModel}</Badge>
         {#if store.routes.venice > 0}<Badge variant="secondary" class="text-[10px]">venice ×{store.routes.venice}</Badge>{/if}
       </div>
     </section>
@@ -702,9 +636,9 @@
 
     <section>
       <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Blockchain</h2>
-      <div class="rounded-lg border bg-card p-3 text-xs text-muted-foreground">
-        Wallet balance, last 5 txns and price candles land here next (Base Sepolia).
-      </div>
+      <a href="/wallet" class="block rounded-lg border bg-card p-3 text-xs text-muted-foreground transition-colors hover:bg-muted/50">
+        Wallet balance, recent txns and price details live on the Wallet page →
+      </a>
     </section>
   </aside>
 </div>

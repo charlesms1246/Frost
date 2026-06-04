@@ -14,7 +14,12 @@ import { resolve } from "node:path";
 export default defineConfig({
   plugins: [svelte()],
   resolve: {
-    alias: { $lib: resolve(__dirname, "src/lib") },
+    alias: {
+      $lib: resolve(__dirname, "src/lib"),
+      // SvelteKit virtual modules aren't provided under plain vitest — stub the
+      // ones our store modules touch (theme/profile import `browser`).
+      "$app/environment": resolve(__dirname, "src/lib/test/app-environment-stub.ts"),
+    },
     conditions: ["browser"],
   },
   test: {

@@ -1,183 +1,166 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
+  import { profile } from "$lib/stores/profile.svelte";
+  import { config } from "$lib/stores/config.svelte";
+  import GradientBackdrop from "$lib/components/brand/GradientBackdrop.svelte";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  // Both Tauri windows load "/". We branch on the window LABEL:
+  //  • "splashscreen" → show the preloader, then reveal the main window.
+  //  • "main" (or a plain browser) → entry gate: redirect by saved profile.
+  // The main window loads hidden, so its redirect happens before the splash
+  // reveals it — the user lands straight on dashboard (returning) or signup.
+  let mode = $state<"gate" | "splash">("gate");
+  let progress = $state(0);
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  async function finishSplash() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("finish_splash");
+    } catch {
+      /* not under Tauri — nothing to reveal */
+    }
   }
+
+  function runPreloader() {
+    const DURATION = 1700;
+    let raf = 0;
+    let start = 0;
+    let finished = false;
+    const tick = (t: number) => {
+      if (!start) start = t;
+      progress = Math.min(100, ((t - start) / DURATION) * 100);
+      if (progress < 100) raf = requestAnimationFrame(tick);
+      else if (!finished) {
+        finished = true;
+        finishSplash();
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }
+
+  function redirect() {
+    const dest = profile.signedIn ? (config.onboarded ? "/chat" : "/setup") : "/signup";
+    goto(dest, { replaceState: true });
+  }
+
+  onMount(() => {
+    let cleanup: (() => void) | undefined;
+    (async () => {
+      let label = "main";
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        label = getCurrentWindow().label;
+      } catch {
+        label = "main"; // plain browser (no Tauri) → behave as the gate
+      }
+      if (label === "splashscreen") {
+        mode = "splash";
+        cleanup = runPreloader();
+      } else {
+        mode = "gate";
+        redirect();
+      }
+    })();
+    return () => cleanup?.();
+  });
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
-
-  <nav class="nav">
-    <a href="/dashboard" class="nav-btn">Open dashboard</a>
-    <a href="/bridge" class="nav-btn">Wallet bridge (spikes 7 / 8 / 10)</a>
-  </nav>
-
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
+{#if mode === "splash"}
+  <div class="splash">
+    <GradientBackdrop intensity="vivid" />
+    <div class="content">
+      <img src="/frost-logo.svg" alt="Frost" class="mark" draggable="false" />
+      <h1 class="wordmark">FROST</h1>
+      <p class="tagline">Agentic web3 automation</p>
+    </div>
+    <div class="loader" aria-label="Loading">
+      <div class="bar" style={`width:${progress}%`}></div>
+    </div>
   </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
-
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
-</main>
+{:else}
+  <!-- Entry gate: invisible (main window is hidden), just redirects. -->
+  <div class="gate"><GradientBackdrop intensity="subtle" /></div>
+{/if}
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.nav {
-  display: flex;
-  justify-content: center;
-  gap: 0.5rem;
-  margin: 1rem 0 1.5rem;
-}
-.nav-btn {
-  display: inline-block;
-  padding: 0.6em 1.2em;
-  border: 1px solid #396cd8;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #0f0f0f;
-  font-weight: 500;
-  text-decoration: none;
-}
-.nav-btn:hover { background: #e8efff; color: #0f0f0f; }
-@media (prefers-color-scheme: dark) {
-  .nav-btn { background: #0f0f0f98; color: #f6f6f6; border-color: #24c8db; }
-  .nav-btn:hover { background: #0f0f0f69; color: #24c8db; }
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+  .gate {
+    position: relative;
+    height: 100vh;
+    width: 100%;
   }
-
-  a:hover {
-    color: #24c8db;
+  .splash {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--background);
+    -webkit-user-select: none;
+    user-select: none;
   }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+  .content {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
   }
-  button:active {
-    background-color: #0f0f0f69;
+  .mark {
+    width: 72px;
+    height: 72px;
+    filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.35));
+    animation: rise 600ms ease-out both;
   }
-}
-
+  .wordmark {
+    margin-top: 14px;
+    font-family: "Frost Display", var(--font-sans);
+    font-size: 40px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--foreground);
+    animation: rise 600ms 80ms ease-out both;
+  }
+  .tagline {
+    margin-top: 2px;
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    animation: rise 600ms 160ms ease-out both;
+  }
+  .loader {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    height: 4px;
+    background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  }
+  .bar {
+    height: 100%;
+    background: linear-gradient(90deg, #b7f4ff, #7694e6, #6377df);
+    box-shadow: 0 0 12px color-mix(in oklab, #7694e6 60%, transparent);
+    transition: width 80ms linear;
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mark,
+    .wordmark,
+    .tagline {
+      animation: none;
+    }
+  }
 </style>

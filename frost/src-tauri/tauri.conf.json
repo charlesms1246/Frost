@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Frost",
         "width": 1100,
         "height": 720,
@@ -19,7 +20,22 @@
         "minHeight": 480,
         "decorations": false,
         "transparent": false,
-        "shadow": true
+        "shadow": true,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "splashscreen",
+        "url": "/",
+        "title": "Frost",
+        "width": 460,
+        "height": 300,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true,
+        "resizable": false,
+        "skipTaskbar": true
       }
     ],
     "security": {
