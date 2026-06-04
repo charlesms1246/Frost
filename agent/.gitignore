@@ -1,0 +1,15 @@
+# dependencies
+/node_modules
+
+# build
+/dist
+
+# testing
+/coverage
+
+# typescript
+*.tsbuildinfo
+
+# local env files
+.env*.local
+.env
