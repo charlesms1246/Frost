@@ -63,3 +63,74 @@ export const erc20Abi: Abi = [
     outputs: [{ name: "", type: "uint256" }],
   },
 ];
+
+/**
+ * AuditRegistry (§10.8 on-chain audit-root anchor). Hand-written like {@link erc20Abi}
+ * — the contract is small and has no generated JSON copy under `sdk/abi/`.
+ */
+export const auditRegistryAbi: Abi = [
+  {
+    type: "function",
+    name: "commit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "merkleRoot", type: "bytes32" },
+      { name: "sessionEnd", type: "uint64" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "commitWithSig",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "sessionId", type: "bytes32" },
+      { name: "merkleRoot", type: "bytes32" },
+      { name: "sessionEnd", type: "uint64" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "commitments",
+    stateMutability: "view",
+    inputs: [{ name: "sessionId", type: "bytes32" }],
+    outputs: [
+      { name: "merkleRoot", type: "bytes32" },
+      { name: "committer", type: "address" },
+      { name: "sessionEnd", type: "uint64" },
+      { name: "committedAt", type: "uint64" },
+    ],
+  },
+  {
+    type: "function",
+    name: "isCommitted",
+    stateMutability: "view",
+    inputs: [{ name: "sessionId", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "domainSeparator",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
+  {
+    type: "event",
+    name: "AuditCommitted",
+    inputs: [
+      { name: "sessionId", type: "bytes32", indexed: true },
+      { name: "merkleRoot", type: "bytes32", indexed: true },
+      { name: "committer", type: "address", indexed: true },
+      { name: "sessionEnd", type: "uint64", indexed: false },
+      { name: "committedAt", type: "uint64", indexed: false },
+    ],
+  },
+  { type: "error", name: "AlreadyCommitted", inputs: [{ name: "sessionId", type: "bytes32" }] },
+  { type: "error", name: "ZeroRoot", inputs: [] },
+  { type: "error", name: "ZeroSession", inputs: [] },
+  { type: "error", name: "InvalidSignature", inputs: [] },
+];

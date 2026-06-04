@@ -17,6 +17,8 @@ export const FROST_BASE_SEPOLIA = {
   refillableMandate:  "0x4DeC870341cfcbc208b5A7c985946e49Eb70b76E",
   usdc:               "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   delegationManager:  "0xdb9B1e94B5b69Df7e401DDbedE43491141047dB3",
+  // §10.8 audit-root anchor. Deployed 2026-06-04 (tx 0x96e25336…327513).
+  auditRegistry:      "0xeA157DE7D1ec58a0610D82171bbb4873bc19319B",
 } as const satisfies FrostDeployment;
 
 export type FrostDeployment = {
@@ -30,7 +32,23 @@ export type FrostDeployment = {
   usdc: Address;
   /** MetaMask Delegation Framework manager on this chain (Day-1 spike 8). */
   delegationManager: Address;
+  /** AuditRegistry (§10.8). Zero address ⇒ not yet deployed. */
+  auditRegistry: Address;
 };
+
+/**
+ * AuditRegistry EIP-712 domain. Intentionally has NO `verifyingContract` so it matches
+ * the wallet-bridge co-sign page (`web/app/connect/commit`) byte-for-byte; `name` and
+ * `version` are baked into AuditRegistry.sol. (Adding `verifyingContract` to both the
+ * contract and the page is a post-MVP hardening.)
+ */
+export function auditCommitEip712Domain(deployment: FrostDeployment) {
+  return {
+    name: "Frost",
+    version: "0.1.0",
+    chainId: deployment.chainId,
+  } as const;
+}
 
 /**
  * Settlement EIP-712 domain. Constant across deployments on the same chain
