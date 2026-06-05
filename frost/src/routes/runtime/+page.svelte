@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { AgentSessionStore } from "$lib/stores/agent-session.svelte";
   import { config, fallbackKeyOf } from "$lib/stores/config.svelte";
   import { handoff } from "$lib/stores/handoff.svelte";
@@ -7,8 +8,13 @@
   import ActivityLog from "$lib/components/dashboard/ActivityLog.svelte";
   import { createEmbeddedSession } from "$lib/agent/session";
   import { eoaProvisioner, simulatedIssuer } from "$lib/agent/holders";
-  import { makeSimulatedExecutorRunner } from "$lib/agent/executor-runner";
-  import { revocableIssuer } from "$lib/agent/revocation";
+  import { makeSimulatedExecutorRunner, makeRelayerExecutorRunner, makeExecutorRunner } from "$lib/agent/executor-runner";
+  import { usdcTransferWork } from "$lib/agent/relayer-exec";
+  import { GRANT_TOKEN } from "$lib/wallet-connect";
+  import { profile } from "$lib/stores/profile.svelte";
+  import { revocableIssuer, liveRevoke } from "$lib/agent/revocation";
+  import { createLiveRootMandate, liveSdkIssuer } from "$lib/agent/live";
+  import { liveCommitAudit } from "$lib/agent/audit-commit";
   import { buildTransport } from "$lib/agent/transport";
   import { TauriKeyStore } from "$lib/key-store";
   import { customAgents, toDefinition } from "$lib/stores/custom-agents.svelte";
@@ -17,6 +23,7 @@
     renderSpec,
     sessionContextFrom,
     BASE_SEPOLIA_DEPLOYMENT,
+    BASE_SEPOLIA_SWAP_ROUTER_02,
     buildReceipt,
     CustomAgentRegistry,
   } from "@frost/agent/browser";
@@ -65,12 +72,75 @@
   let testingHitl = $state(false);
   let revoking = $state(false);
 
-  /** Demo moment 3: revoke the master's spawning authority (simulated — live 1Shot path lands later). */
-  function revoke() {
+  // --- Demo: live on Base Sepolia via the funded session key (read from .env by the
+  // Rust `load_demo_credentials` command; held in memory only, never persisted). When
+  // loaded, /runtime runs the PROVEN live path (real issuance / 1Shot swap / audit commit
+  // / revocation) instead of simulation. Absent ⇒ simulated (unchanged behavior).
+  type DemoCreds = {
+    sessionKey: `0x${string}`;
+    rpcUrl: string;
+    apiKey: string;
+    apiSecret: string;
+    walletId: string;
+    walletAddress: `0x${string}`;
+    swapMethodId: string;
+  };
+  let demo = $state<DemoCreds | null>(null);
+  let loadingDemo = $state(false);
+  let demoError = $state("");
+  let liveRootMandateId = $state<`0x${string}` | undefined>(undefined);
+  /** Live 1Shot swap is possible only with the 1Shot creds + a registered swap method. */
+  const demoSwapReady = $derived(
+    !!demo && !!demo.apiKey && !!demo.apiSecret && !!demo.walletId && !!demo.swapMethodId,
+  );
+
+  // Live WETH→USDC swap params (proven in agent/scripts/executor-live-swap.mjs).
+  const WETH = "0x4200000000000000000000000000000000000006" as `0x${string}`;
+  const SWAP_AMOUNT_IN_WEI = "1000000000000000"; // 0.001 WETH (~$3.70)
+
+  async function loadDemoCreds() {
+    loadingDemo = true;
+    demoError = "";
+    try {
+      const c = await invoke<{
+        sessionKey?: string; rpcUrl?: string; apiKey?: string; apiSecret?: string;
+        walletId?: string; walletAddress?: string; swapMethodId?: string;
+      }>("load_demo_credentials");
+      if (!c.sessionKey) {
+        demoError = "No BASE_SEPOLIA_PK found in .env — running simulated.";
+        demo = null;
+        return;
+      }
+      demo = {
+        sessionKey: (c.sessionKey.startsWith("0x") ? c.sessionKey : "0x" + c.sessionKey) as `0x${string}`,
+        rpcUrl: c.rpcUrl || config.value.rpcUrl || "https://sepolia.base.org",
+        apiKey: c.apiKey ?? "",
+        apiSecret: c.apiSecret ?? "",
+        walletId: c.walletId ?? "",
+        walletAddress: (c.walletAddress ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
+        swapMethodId: c.swapMethodId ?? "",
+      };
+    } catch (e) {
+      demoError = e instanceof Error ? e.message : String(e);
+      demo = null;
+    } finally {
+      loadingDemo = false;
+    }
+  }
+
+  /** Demo moment 3: revoke the master's spawning authority. Live `Revocation.revoke`
+   * on-chain when demo creds are loaded (+ a root mandate exists); always marks the
+   * store so the tree greys + the spawn cascade fires. */
+  async function revoke() {
     if (store.spawningRevoked || revoking) return;
     revoking = true;
     try {
+      if (demo && liveRootMandateId) {
+        await liveRevoke({ sessionPrivateKey: demo.sessionKey, rpcUrl: demo.rpcUrl, mandateId: liveRootMandateId });
+      }
       store.markSpawningRevoked();
+    } catch (e) {
+      store.markError("Revoke failed: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       revoking = false;
     }
@@ -109,13 +179,56 @@
   }
 
   function buildExecutorRunner(spec: CompiledSpec): SubAgentRunner {
+    const requestApproval = (req: Parameters<typeof store.awaitApproval>[0]) => store.awaitApproval(req);
     const context = sessionContextFrom(spec, BASE_SEPOLIA_DEPLOYMENT);
-    return makeSimulatedExecutorRunner({
-      context,
-      spec,
-      notionalUsdc: execNotional(),
-      requestApproval: (req) => store.awaitApproval(req),
-    });
+
+    // DEMO LIVE: a real WETH→USDC swap through 1Shot's private mempool from the funded
+    // server wallet. Runs the same §10.3 preflight (against the signed CALLABLE_SURFACE)
+    // + HITL gate; only the submit is real. Highest-priority when demo creds are loaded.
+    if (demoSwapReady && demo) {
+      return makeExecutorRunner({
+        oneShot: { apiKey: demo.apiKey, apiSecret: demo.apiSecret, walletId: demo.walletId },
+        contractMethodId: demo.swapMethodId,
+        swap: {
+          target: BASE_SEPOLIA_SWAP_ROUTER_02,
+          signature: "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+          notionalUsdc: execNotional(),
+          params: {
+            params: {
+              tokenIn: WETH,
+              tokenOut: GRANT_TOKEN,
+              fee: "3000",
+              recipient: demo.walletAddress,
+              amountIn: SWAP_AMOUNT_IN_WEI,
+              amountOutMinimum: "0",
+              sqrtPriceLimitX96: "0",
+            },
+          },
+          slippageBps: spec.slippageBps,
+        },
+        context,
+        spec,
+        requestApproval,
+      });
+    }
+
+    // KEYLESS relayer path: when the user has granted authority to the public relayer and
+    // we know their address, the executor redeems the grant on-chain (a USDC self-transfer
+    // of the notional — proves redemption, moves nothing out). Same HITL gate as the
+    // simulated path. Otherwise simulate (no grant ⇒ no real submit).
+    const grant = config.value.metaMaskGrant;
+    const userAddr = profile.value.walletAddress;
+    if (grant && userAddr && /^0x[0-9a-fA-F]{40}$/.test(userAddr)) {
+      const notionalUsdc = execNotional();
+      return makeRelayerExecutorRunner({
+        granted: JSON.parse(grant),
+        spec,
+        notionalUsdc,
+        work: [usdcTransferWork(GRANT_TOKEN, userAddr as `0x${string}`, notionalUsdc)],
+        requestApproval,
+      });
+    }
+    return makeSimulatedExecutorRunner({ context, spec, notionalUsdc: execNotional(), requestApproval });
   }
 
   let pending = $state(false);
@@ -157,10 +270,21 @@
     committing = true;
     commitError = undefined;
     try {
-      // No raw key in the client — anchor is simulated until the custodial
-      // signing wallet path is wired.
-      commitTx = receipt.merkleRoot;
-      commitSimulated = true;
+      if (demo) {
+        // LIVE anchor on Base Sepolia via the funded session key → AuditRegistry.commit.
+        commitTx = await liveCommitAudit({
+          sessionPrivateKey: demo.sessionKey,
+          rpcUrl: demo.rpcUrl,
+          sessionId: receipt.sessionId as `0x${string}`,
+          merkleRoot: receipt.merkleRoot as `0x${string}`,
+          sessionEnd: BigInt(Math.floor(Date.now() / 1000)),
+        });
+        commitSimulated = false;
+      } else {
+        // No key — simulated anchor (just surfaces the root).
+        commitTx = receipt.merkleRoot;
+        commitSimulated = true;
+      }
     } catch (e) {
       commitError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -191,12 +315,20 @@
     return transportRef;
   }
 
-  // Hand-off from the master-agent chat: prefill the workflow and auto-compile.
+  // Hand-off from the master-agent chat. If the chat-side master loop already
+  // compiled a ready spec, run it directly; otherwise prefill + auto-compile.
   onMount(() => {
-    const w = handoff.take();
-    if (w) {
-      workflow = w;
-      if (config.ready) compile();
+    const h = handoff.take();
+    if (!h) return;
+    workflow = h.workflow;
+    if (h.answers) answers = h.answers;
+    if (h.spec && h.compileResult) {
+      compiledSpec = h.spec;
+      compileResult = h.compileResult;
+      review = h.compileResult.escalateToHITL ? [] : safeRender(h.spec);
+      if (config.ready) run();
+    } else if (config.ready) {
+      compile();
     }
   });
 
@@ -253,11 +385,20 @@
     activeTab = "tree"; // snap to the camera anchor while agents are live
     try {
       const transport = ensureTransport();
-      // Issuance is simulated in the client (no raw key). The live path uses the
-      // custodial signing wallet and lands in a later round.
-      const inner: SubMandateIssuer = simulatedIssuer();
-      const rootMandateId = (store.master.rootMandateId as `0x${string}` | undefined) ??
-        (("0x" + "b".repeat(64)) as `0x${string}`);
+      // Issuance: LIVE on Base Sepolia when demo creds are loaded (real root mandate via
+      // the funded session key, then real sub-mandates under it); else simulated.
+      let inner: SubMandateIssuer;
+      let rootMandateId: `0x${string}`;
+      if (demo) {
+        const root = await createLiveRootMandate({ sessionPrivateKey: demo.sessionKey, rpcUrl: demo.rpcUrl, spec });
+        rootMandateId = root.rootMandateId;
+        liveRootMandateId = root.rootMandateId;
+        inner = liveSdkIssuer({ sessionPrivateKey: demo.sessionKey, rpcUrl: demo.rpcUrl });
+      } else {
+        inner = simulatedIssuer();
+        rootMandateId = (store.master.rootMandateId as `0x${string}` | undefined) ??
+          (("0x" + "b".repeat(64)) as `0x${string}`);
+      }
       // Once revoked, every spawn attempt fails before any chain write (the cascade).
       const issue = revocableIssuer(inner, () => store.spawningRevoked);
 
@@ -394,6 +535,27 @@
             </div>
           {/if}
 
+          <!-- Demo: run live on Base Sepolia with the funded session key (read from .env). -->
+          <div class="flex items-center justify-between gap-3 rounded-lg border bg-card p-3 text-xs">
+            <div class="min-w-0">
+              <p class="font-medium">
+                {#if demo}<span class="text-primary">● Live on Base Sepolia</span>{:else}<span class="text-muted-foreground">○ Simulated run</span>{/if}
+              </p>
+              <p class="truncate text-muted-foreground">
+                {#if demo}
+                  Real issuance · {demoSwapReady ? "live 1Shot swap" : "simulated swap"} · audit anchor · revocation
+                {:else}
+                  Load funded creds from .env to run real on-chain txs (issuance, swap, anchor, revoke).
+                {/if}
+              </p>
+              {#if demoError}<p class="text-[10px] text-destructive">{demoError}</p>{/if}
+            </div>
+            <Button variant={demo ? "outline" : "secondary"} size="sm" onclick={loadDemoCreds} disabled={loadingDemo}>
+              {#if loadingDemo}<Loader2 class="mr-1 size-3.5 animate-spin" />{/if}
+              {demo ? "Reload" : "Load demo creds"}
+            </Button>
+          </div>
+
           <div class="grid gap-1.5">
             <Label for="wf">Workflow (natural language)</Label>
             <Textarea id="wf" rows={3} bind:value={workflow} />
@@ -491,7 +653,8 @@
               <Card.Title class="text-sm">Executor & human-in-the-loop</Card.Title>
               <Card.Description class="text-xs">
                 A spawned executor runs the real §10.3 preflight against your signed CALLABLE_SURFACE.
-                A simulated swap above your HITL threshold pauses for approval (no funds moved).
+                {#if demoSwapReady}A live WETH→USDC swap{:else}A simulated swap{/if} above your HITL
+                threshold pauses for approval{demoSwapReady ? "" : " (no funds moved)"}.
               </Card.Description>
             </Card.Header>
             <Card.Content class="flex flex-col gap-3">
@@ -556,8 +719,13 @@
                 </div>
                 {#if commitTx}
                   <div class="rounded-lg border bg-card p-2 text-xs">
-                    <span class="text-muted-foreground">Simulated anchor (signing wallet path lands next). Root:</span>
-                    <span class="font-mono break-all">{commitTx}</span>
+                    {#if commitSimulated}
+                      <span class="text-muted-foreground">Simulated anchor (load demo creds for a real tx). Root:</span>
+                      <span class="font-mono break-all">{commitTx}</span>
+                    {:else}
+                      <span class="text-muted-foreground">Anchored on-chain (AuditRegistry):</span>
+                      <a class="font-mono break-all text-primary underline" href={`https://sepolia.basescan.org/tx/${commitTx}`} target="_blank" rel="noopener noreferrer">{commitTx}</a>
+                    {/if}
                   </div>
                 {/if}
                 {#if commitError}
@@ -628,6 +796,16 @@
     <section>
       <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Authority state</h2>
       <div class="flex flex-col gap-1 rounded-lg border bg-card p-3 text-xs">
+        <div class="flex justify-between">
+          <span class="text-muted-foreground">root authority</span>
+          {#if config.value.metaMaskGrant}
+            <span class="text-primary">MetaMask · ${(Number(config.value.grantMaxAmount ?? 0) / 1e6).toFixed(0)} USDC</span>
+          {:else if demo}
+            <span class="text-primary">live · session key</span>
+          {:else}
+            <span>simulated</span>
+          {/if}
+        </div>
         <div class="flex justify-between"><span class="text-muted-foreground">sub-mandates</span><span>{store.authority?.subMandateCount ?? 0}</span></div>
         <div class="flex justify-between"><span class="text-muted-foreground">aggregate budget</span><span>{usdc(store.authority?.aggregateSubMandateBudget)}</span></div>
         <div class="flex justify-between"><span class="text-muted-foreground">rate-limit tokens</span><span>{store.authority?.bucketAvailable ?? "—"}</span></div>

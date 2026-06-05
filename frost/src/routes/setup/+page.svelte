@@ -3,15 +3,20 @@
   import { config, fallbackKeyOf, type ProviderId } from "$lib/stores/config.svelte";
   import { syncConfigToHosted } from "$lib/config-sync";
   import { provisionSigningWallet } from "$lib/signing-wallet";
+  import { captureMetaMaskAuthority } from "$lib/wallet-connect";
   import AuthShell from "$lib/components/brand/AuthShell.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Wallet from "@lucide/svelte/icons/wallet";
+  import ShieldCheck from "@lucide/svelte/icons/shield-check";
   import Check from "@lucide/svelte/icons/check";
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
+  import ListChecks from "@lucide/svelte/icons/list-checks";
+  import ModelCombobox from "$lib/components/ModelCombobox.svelte";
+  import { fetchModelCatalog, type CatalogProvider } from "$lib/agent/model-catalog";
 
   const c = config.value;
 
@@ -25,17 +30,45 @@
   let groqApiKey = $state(c.groqApiKey);
   let fallbackModels = $state<[string, string, string]>([...c.fallbackModels]);
   let rpcUrl = $state(c.rpcUrl);
+  let basescanApiKey = $state(c.basescanApiKey);
   let signingWalletId = $state(c.signingWalletId);
   let signingWalletAddress = $state(c.signingWalletAddress);
+  // The ERC-7715 authority lives in the config store (set at sign-in or here); read it live.
+  const grant = $derived(config.value);
+  let connecting = $state(false);
+  let connectError = $state("");
 
   let provisioning = $state(false);
   let saving = $state(false);
+
+  // Model lists fetched from the provider APIs (so the user picks, not types).
+  let veniceModelOpts = $state<string[]>([]);
+  let fallbackModelOpts = $state<string[]>([]);
+  let loadingModels = $state<"venice" | "fallback" | "">("");
+  let modelError = $state("");
+
+  async function loadModels(which: "venice" | "fallback") {
+    loadingModels = which;
+    modelError = "";
+    try {
+      const provider: CatalogProvider = which === "venice" ? "venice" : fallbackProvider;
+      const key = which === "venice" ? veniceApiKey : fallbackKey;
+      const ids = (await fetchModelCatalog(provider, key)).map((m) => m.id);
+      if (which === "venice") veniceModelOpts = ids;
+      else fallbackModelOpts = ids;
+      if (ids.length === 0) modelError = `${provider} returned no models.`;
+    } catch (e) {
+      modelError = e instanceof Error ? e.message : String(e);
+    } finally {
+      loadingModels = "";
+    }
+  }
 
   const STEPS = [
     { key: "primary", label: "Primary", quote: "Venice first.", sub: "Your primary x402 inference models." },
     { key: "fallback", label: "Fallback", quote: "A backup you trust.", sub: "OpenRouter or Groq, when Venice is busy." },
     { key: "comms", label: "Comms", quote: "Stay in the loop.", sub: "Where your agents report in." },
-    { key: "wallet", label: "Wallet", quote: "No keys to manage.", sub: "Frost runs a funded wallet for you." },
+    { key: "review", label: "Review", quote: "Confirm and go.", sub: "Review your configuration before finishing." },
   ] as const;
   let step = $state(0);
   const current = $derived(STEPS[step]);
@@ -58,10 +91,25 @@
       groqApiKey: groqApiKey.trim(),
       fallbackModels,
       rpcUrl: rpcUrl.trim(),
+      basescanApiKey: basescanApiKey.trim(),
       ...(signingWalletId ? { signingWalletId } : {}),
       ...(signingWalletAddress ? { signingWalletAddress } : {}),
       ...extra,
     });
+  }
+
+  /** Capture a real ERC-7715 grant from the user's MetaMask (the session root authority). */
+  async function connectMetaMask() {
+    if (connecting) return;
+    connecting = true;
+    connectError = "";
+    try {
+      await captureMetaMaskAuthority();
+    } catch (e) {
+      connectError = e instanceof Error ? e.message : String(e);
+    } finally {
+      connecting = false;
+    }
   }
 
   function next() {
@@ -129,10 +177,18 @@
         <Input id="venice" type="password" bind:value={veniceApiKey} placeholder="your Venice inference key" />
       </div>
       <div class="grid gap-1.5">
-        <Label>Venice models — in order of preference</Label>
+        <div class="flex items-center justify-between">
+          <Label>Venice models — in order of preference</Label>
+          <Button type="button" variant="ghost" size="sm" class="h-6 px-2 text-xs" onclick={() => loadModels("venice")} disabled={loadingModels !== "" || !veniceApiKey.trim()}>
+            {#if loadingModels === "venice"}<Loader2 class="size-3.5 animate-spin" />{:else}<ListChecks class="size-3.5" />{/if}
+            Load models
+          </Button>
+        </div>
         {#each [0, 1, 2] as i (i)}
-          <Input bind:value={veniceModels[i]} placeholder={i === 0 ? "llama-3.3-70b (primary)" : `choice ${i + 1}`} />
+          <ModelCombobox bind:value={veniceModels[i]} options={veniceModelOpts} placeholder={i === 0 ? "primary model" : `choice ${i + 1} (optional)`} />
         {/each}
+        {#if veniceModelOpts.length > 0}<p class="text-[10px] text-muted-foreground">{veniceModelOpts.length} models loaded.</p>{/if}
+        {#if modelError}<p class="text-[10px] text-destructive">{modelError}</p>{/if}
       </div>
       <div class="grid w-32 gap-1.5">
         <Label for="vbudget">Venice call budget</Label>
@@ -171,10 +227,18 @@
         </div>
       {/if}
       <div class="grid gap-1.5">
-        <Label>Fallback models — in order of preference</Label>
+        <div class="flex items-center justify-between">
+          <Label>Fallback models — in order of preference</Label>
+          <Button type="button" variant="ghost" size="sm" class="h-6 px-2 text-xs" onclick={() => loadModels("fallback")} disabled={loadingModels !== "" || (fallbackProvider === "groq" && !groqApiKey.trim())}>
+            {#if loadingModels === "fallback"}<Loader2 class="size-3.5 animate-spin" />{:else}<ListChecks class="size-3.5" />{/if}
+            Load models
+          </Button>
+        </div>
         {#each [0, 1, 2] as i (i)}
-          <Input bind:value={fallbackModels[i]} placeholder={fallbackProvider === "groq" ? "llama-3.3-70b-versatile" : "openai/gpt-4o-mini"} />
+          <ModelCombobox bind:value={fallbackModels[i]} options={fallbackModelOpts} placeholder={i === 0 ? (fallbackProvider === "groq" ? "llama-3.3-70b-versatile" : "openai/gpt-4o-mini") : `choice ${i + 1} (optional)`} />
         {/each}
+        {#if fallbackModelOpts.length > 0}<p class="text-[10px] text-muted-foreground">{fallbackModelOpts.length} models loaded.</p>{/if}
+        {#if modelError}<p class="text-[10px] text-destructive">{modelError}</p>{/if}
       </div>
       <p class="text-[10px] text-muted-foreground">
         Used when Venice is unavailable or out of budget. Either Venice or a fallback is enough to finish.
@@ -186,31 +250,61 @@
         <p class="text-[10px] text-muted-foreground">Where agents post updates. Optional — you can add it later.</p>
       </div>
     {:else}
-      <!-- Wallet -->
-      {#if signingWalletAddress}
-        <div class="flex items-center gap-2 rounded-lg border bg-muted/40 p-3 text-xs">
-          <Check class="size-4 text-primary" />
-          <div>
-            <div class="text-[10px] uppercase tracking-wide text-muted-foreground">Signing wallet</div>
-            <div class="font-mono break-all">{signingWalletAddress}</div>
-          </div>
+      <!-- Review & confirm -->
+      <div class="flex flex-col gap-2 text-xs">
+        <div class="flex items-center justify-between rounded-lg border bg-card p-2.5">
+          <span class="text-muted-foreground">Primary (Venice)</span>
+          <span class="font-mono">{veniceModels[0] || "—"}</span>
         </div>
-      {:else}
-        <p class="text-sm text-muted-foreground">
-          Frost runs a funded custodial wallet for your live actions — you never see or hold a private key.
-          We provision and fund it for you.
-        </p>
-        <Button type="button" variant="secondary" class="w-fit" onclick={provision} disabled={provisioning}>
-          {#if provisioning}<Loader2 class="size-4 animate-spin" />{:else}<Wallet class="size-4" />{/if}
-          Provision signing wallet
-        </Button>
-        <p class="text-[10px] text-muted-foreground">Optional now — you can provision it later from Settings.</p>
-      {/if}
+        <div class="flex items-center justify-between rounded-lg border bg-card p-2.5">
+          <span class="text-muted-foreground">Fallback</span>
+          <span class="font-mono">{fallbackProvider} · {fallbackModels[0] || "—"}</span>
+        </div>
+        <div class="flex items-center justify-between rounded-lg border bg-card p-2.5">
+          <span class="text-muted-foreground">Discord</span>
+          <span>{discordWebhookUrl.trim() ? "configured" : "off"}</span>
+        </div>
+
+        {#if grant.metaMaskGrant}
+          <div class="rounded-lg border border-primary/40 bg-primary/5 p-2.5">
+            <div class="mb-1 flex items-center gap-2 font-medium text-primary"><ShieldCheck class="size-4" /> Spending authority granted</div>
+            <div class="text-muted-foreground">
+              ${(Number(grant.grantMaxAmount ?? 0) / 1e6).toFixed(2)} USDC · revocable · delegate
+              <span class="font-mono text-foreground">{grant.sessionAccount?.slice(0, 12)}…</span>
+            </div>
+          </div>
+        {:else}
+          <div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-amber-700 dark:text-amber-300">
+            <p class="mb-2">No MetaMask authority yet — connect to let your agents act under a scoped, revocable grant (you can also do this later from Account).</p>
+            <Button type="button" size="sm" onclick={connectMetaMask} disabled={connecting}>
+              {#if connecting}<Loader2 class="size-4 animate-spin" />{:else}<Wallet class="size-4" />{/if}
+              Connect MetaMask
+            </Button>
+            {#if connectError}<p class="mt-1 break-all text-destructive">{connectError}</p>{/if}
+          </div>
+        {/if}
+      </div>
+
       <details class="rounded-lg border bg-card px-3 py-2">
         <summary class="cursor-pointer text-xs font-medium">Advanced</summary>
         <div class="mt-2 grid gap-1.5">
           <Label for="rpc">Base Sepolia RPC URL</Label>
           <Input id="rpc" bind:value={rpcUrl} />
+        </div>
+        <div class="mt-2 grid gap-1.5">
+          <Label for="basescan">BaseScan API key <span class="text-muted-foreground">(optional — enables the agent's contract lookups)</span></Label>
+          <Input id="basescan" bind:value={basescanApiKey} placeholder="BaseScan / Etherscan-v2 key" />
+        </div>
+        <div class="mt-3 grid gap-1.5">
+          <span class="text-[10px] uppercase tracking-wide text-muted-foreground">Custodial signing wallet (optional)</span>
+          {#if signingWalletAddress}
+            <div class="font-mono text-[11px] break-all">{signingWalletAddress}</div>
+          {:else}
+            <Button type="button" variant="secondary" size="sm" class="w-fit" onclick={provision} disabled={provisioning}>
+              {#if provisioning}<Loader2 class="size-4 animate-spin" />{:else}<Wallet class="size-4" />{/if}
+              Provision signing wallet
+            </Button>
+          {/if}
         </div>
       </details>
     {/if}

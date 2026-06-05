@@ -1,0 +1,108 @@
+name: Release (Tauri build)
+
+# Builds the Frost desktop app for Windows, macOS (Apple Silicon) and Linux
+# whenever changes land on the `release` branch, and attaches the installers to
+# a draft GitHub Release (one per app version in frost/src-tauri/tauri.conf.json).
+#
+# Builds are unsigned, except macOS which uses free ad-hoc signing
+# (APPLE_SIGNING_IDENTITY: "-"). Windows installers are unsigned and will show a
+# SmartScreen warning until a real Authenticode certificate is wired in.
+on:
+  push:
+    branches:
+      - release
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+# tauri-action needs write access to create/update the GitHub Release.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest # Apple Silicon (M-series) runner
+            rust-target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+          - platform: ubuntu-latest
+            rust-target: ""
+            args: ""
+          - platform: windows-latest
+            rust-target: ""
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            file
+        # libxdo-dev is required because src-tauri enables Tauri's `tray-icon` feature.
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            agent/package-lock.json
+            frost/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./frost/src-tauri -> target
+          key: ${{ matrix.platform }}
+
+      # Build order matters: frost depends on @frost/agent and @frost/sdk via
+      # `file:` links, and agent depends on sdk. Each must emit its dist/ before
+      # the next consumer (and before tauri-action runs the frost frontend build).
+      - name: Build @frost/sdk
+        working-directory: sdk
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build @frost/agent
+        working-directory: agent
+        run: |
+          npm ci
+          npm run build
+
+      # tauri-action installs frost's frontend deps, runs the beforeBuildCommand
+      # (vite build), then `tauri build`, and uploads the bundles to the release.
+      - name: Build Tauri app and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Free ad-hoc signing on macOS (no Apple Developer cert required).
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          projectPath: frost
+          tagName: frost-v__VERSION__
+          releaseName: "Frost v__VERSION__"
+          releaseBody: "Automated build from the release branch. See assets below."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

@@ -12,38 +12,37 @@
   const cfg = $derived(config.value);
 </script>
 
-<div class="mx-auto max-w-2xl px-6 py-10">
-  <header class="mb-6">
+<div class="flex h-[calc(100vh-36px)] flex-col px-6 py-5">
+  <header class="mb-4 shrink-0">
     <h1 class="text-xl font-semibold tracking-tight">Settings</h1>
     <p class="text-sm text-muted-foreground">App preferences and configuration.</p>
   </header>
 
-  <div class="flex flex-col gap-5">
-    <!-- Appearance -->
-    <Card.Root>
-      <Card.Header class="pb-3">
+  <!-- Bento grid: fills the viewport, never scrolls. -->
+  <div class="grid min-h-0 flex-1 grid-cols-6 grid-rows-2 gap-4">
+    <!-- Appearance (top-left) -->
+    <Card.Root class="col-span-2 row-span-1 h-full">
+      <Card.Header class="pb-2">
         <Card.Title class="text-base">Appearance</Card.Title>
         <Card.Description>Theme used across the app.</Card.Description>
       </Card.Header>
-      <Card.Content>
-        <div class="flex gap-2">
-          <Button variant={theme.value === "light" ? "default" : "outline"} size="sm" onclick={() => theme.set("light")}>
-            <Sun class="size-4" /> Light
-          </Button>
-          <Button variant={theme.value === "dark" ? "default" : "outline"} size="sm" onclick={() => theme.set("dark")}>
-            <Moon class="size-4" /> Dark
-          </Button>
-        </div>
+      <Card.Content class="flex gap-2">
+        <Button variant={theme.value === "light" ? "default" : "outline"} size="sm" onclick={() => theme.set("light")}>
+          <Sun class="size-4" /> Light
+        </Button>
+        <Button variant={theme.value === "dark" ? "default" : "outline"} size="sm" onclick={() => theme.set("dark")}>
+          <Moon class="size-4" /> Dark
+        </Button>
       </Card.Content>
     </Card.Root>
 
-    <!-- Configuration summary -->
-    <Card.Root>
-      <Card.Header class="pb-3">
+    <!-- Configuration (right, full height) -->
+    <Card.Root class="col-span-4 row-span-2 flex h-full flex-col">
+      <Card.Header class="pb-2">
         <Card.Title class="text-base">Configuration</Card.Title>
         <Card.Description>Models, providers and integrations from onboarding.</Card.Description>
       </Card.Header>
-      <Card.Content class="flex flex-col gap-2 text-xs">
+      <Card.Content class="flex min-h-0 flex-1 flex-col justify-center gap-3 text-xs">
         <div class="flex items-center justify-between">
           <span class="text-muted-foreground">Primary model (Venice)</span>
           <Badge variant="outline">{cfg.veniceModels[0] || "—"}</Badge>
@@ -70,18 +69,19 @@
       </Card.Footer>
     </Card.Root>
 
-    <!-- Developer -->
-    <Card.Root>
-      <Card.Header class="pb-3">
+    <!-- Developer (bottom-left) -->
+    <Card.Root class="col-span-2 row-span-1 flex h-full flex-col">
+      <Card.Header class="pb-2">
         <Card.Title class="text-base">Developer</Card.Title>
-        <Card.Description>Low-level surfaces for testing the runtime and wallet bridge.</Card.Description>
+        <Card.Description>Low-level runtime &amp; bridge surfaces.</Card.Description>
       </Card.Header>
       <Card.Content class="flex flex-wrap gap-2">
         <Button href="/agent" variant="outline" size="sm"><Code class="size-4" /> Agent debug</Button>
         <Button href="/bridge" variant="outline" size="sm"><Code class="size-4" /> Wallet bridge</Button>
       </Card.Content>
+      <Card.Footer class="mt-auto">
+        <p class="text-[10px] text-muted-foreground">Frost v0.1.0 · Port-42 runtime</p>
+      </Card.Footer>
     </Card.Root>
-
-    <p class="text-center text-[10px] text-muted-foreground">Frost v0.1.0 · Port-42 runtime</p>
   </div>
 </div>

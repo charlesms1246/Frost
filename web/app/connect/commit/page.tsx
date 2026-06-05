@@ -21,6 +21,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { detectMetaMask, type MMDetection } from "../_lib/detect-mm";
+import ConnectShell from "../_components/ConnectShell";
 
 const BASE_SEPOLIA_CHAIN_HEX = "0x14a34";
 const BASE_SEPOLIA_CHAIN_ID = 84532;
@@ -191,21 +192,17 @@ function CommitInner() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-start gap-4 p-8 font-sans">
-      <h1 className="text-2xl font-semibold">Frost · commit audit root</h1>
-      <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xl text-center">
-        Signs an EIP-712 commitment over the session&apos;s audit Merkle root. No
-        on-chain transaction — the signature is held until the audit contract
-        is deployed.
-      </p>
-
-      {state.kind === "parsing" && <p>Validating inputs…</p>}
-      {state.kind === "parse-error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">{state.message}</pre>
-      )}
+    <ConnectShell
+      eyebrow="Bridge · Audit"
+      title="Commit audit root"
+      subtitle="Signs an EIP-712 commitment over the session's audit Merkle root. No on-chain transaction — the signature is held until the audit contract is deployed."
+    >
+      {state.kind === "parsing" && <p className="status-line">Validating inputs…</p>}
+      {state.kind === "parse-error" && <pre className="code-block err">{state.message}</pre>}
 
       {"inputs" in state && (
-        <div className="border border-zinc-300 dark:border-zinc-700 rounded p-4 text-sm space-y-1 max-w-xl w-full font-mono text-xs">
+        <div className="connect-card">
+          <div className="card-title">Commitment</div>
           <Row k="sessionId" v={state.inputs.sessionId} />
           <Row k="auditRoot" v={state.inputs.auditRoot} />
           <Row k="sessionEnd" v={`${state.inputs.sessionEnd} (${new Date(state.inputs.sessionEnd * 1000).toISOString()})`} />
@@ -213,56 +210,48 @@ function CommitInner() {
         </div>
       )}
 
-      {state.kind === "waiting-mm" && <p>Detecting MetaMask Flask…</p>}
-      {state.kind === "no-flask" && (
-        <p className="text-sm text-red-700">MetaMask Flask required.</p>
-      )}
+      {state.kind === "waiting-mm" && <p className="status-line">Detecting MetaMask Flask…</p>}
+      {state.kind === "no-flask" && <p className="status-line txt-err">MetaMask Flask required.</p>}
       {state.kind === "ready" && (
-        <button onClick={sign} className="px-4 py-2 rounded bg-zinc-900 text-white">
-          Sign commitment
-        </button>
+        <button onClick={sign} className="frost-btn">Sign commitment</button>
       )}
-      {state.kind === "signing" && <p>Awaiting MetaMask signature…</p>}
-      {state.kind === "posting" && <p>Posting signature back to Frost…</p>}
+      {state.kind === "signing" && <p className="status-line">Awaiting MetaMask signature…</p>}
+      {state.kind === "posting" && <p className="status-line">Posting signature back to Frost…</p>}
       {state.kind === "done" && (
-        <div className="text-center max-w-2xl">
-          <p className="text-green-700 mb-2">Signed by {state.signer}.</p>
-          <pre className="text-xs text-left bg-zinc-100 dark:bg-zinc-900 p-3 rounded overflow-auto break-all">
-            {state.signature}
-          </pre>
+        <div className="connect-sub" style={{ width: "100%", maxWidth: 560 }}>
+          <p className="txt-ok">Signed by <span className="mono">{state.signer}</span>.</p>
+          <pre className="code-block">{state.signature}</pre>
           {state.callbackStatus > 0 && (
-            <p className="text-xs text-zinc-500 mt-2">Callback HTTP {state.callbackStatus}.</p>
+            <p className="txt-muted">Callback HTTP {state.callbackStatus}.</p>
           )}
         </div>
       )}
-      {state.kind === "error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">{state.message}</pre>
-      )}
+      {state.kind === "error" && <pre className="code-block err">{state.message}</pre>}
 
-      <details className="mt-4 max-w-2xl w-full">
-        <summary className="text-xs text-zinc-500 cursor-pointer">debug</summary>
-        <dl className="text-xs grid grid-cols-[max-content_1fr] gap-x-3 break-all mt-2">
-          <dt className="text-zinc-500">challenge</dt><dd>{challenge || "(missing)"}</dd>
-          <dt className="text-zinc-500">port</dt><dd>{port || "(missing)"}</dd>
-          <dt className="text-zinc-500">state</dt><dd>{state.kind}</dd>
-        </dl>
+      <details className="connect-debug">
+        <summary>debug</summary>
+        <div className="connect-card" style={{ marginTop: 10 }}>
+          <div className="kv"><span className="k">challenge</span><span className="v mono">{challenge || "(missing)"}</span></div>
+          <div className="kv"><span className="k">port</span><span className="v mono">{port || "(missing)"}</span></div>
+          <div className="kv"><span className="k">state</span><span className="v mono">{state.kind}</span></div>
+        </div>
       </details>
-    </main>
+    </ConnectShell>
   );
 }
 
 function Row({ k, v }: { k: string; v: string }) {
   return (
-    <div className="grid grid-cols-[6rem_1fr] gap-2">
-      <span className="text-zinc-500">{k}</span>
-      <span className="break-all">{v}</span>
+    <div className="kv narrow">
+      <span className="k">{k}</span>
+      <span className="v mono">{v}</span>
     </div>
   );
 }
 
 export default function CommitPage() {
   return (
-    <Suspense fallback={<p className="p-8">Loading…</p>}>
+    <Suspense fallback={<p className="connect-main">Loading…</p>}>
       <CommitInner />
     </Suspense>
   );

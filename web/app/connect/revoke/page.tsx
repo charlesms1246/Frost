@@ -23,6 +23,7 @@ import {
 } from "viem";
 import { baseSepolia } from "viem/chains";
 import { detectMetaMask, type MMDetection } from "../_lib/detect-mm";
+import ConnectShell from "../_components/ConnectShell";
 import {
   BASE_SEPOLIA_DELEGATION_MANAGER,
   DELEGATION_ARRAY_TYPE,
@@ -60,8 +61,8 @@ function shortHex(s: string, head = 6, tail = 4) {
 
 function DelegationCard({ d, label }: { d: Delegation; label: string }) {
   return (
-    <div className="border border-zinc-300 dark:border-zinc-700 rounded p-4 text-sm space-y-1 max-w-xl w-full">
-      <div className="font-semibold mb-1">{label}</div>
+    <div className="connect-card">
+      <div className="card-title">{label}</div>
       <Row k="delegate" v={shortHex(d.delegate)} />
       <Row k="delegator" v={shortHex(d.delegator)} />
       <Row k="authority" v={shortHex(d.authority, 6, 6)} />
@@ -73,9 +74,9 @@ function DelegationCard({ d, label }: { d: Delegation; label: string }) {
 
 function Row({ k, v }: { k: string; v: string }) {
   return (
-    <div className="grid grid-cols-[6rem_1fr] gap-2 font-mono text-xs">
-      <span className="text-zinc-500">{k}</span>
-      <span className="break-all">{v}</span>
+    <div className="kv narrow">
+      <span className="k">{k}</span>
+      <span className="v mono">{v}</span>
     </div>
   );
 }
@@ -203,25 +204,24 @@ function RevokeInner() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-start gap-4 p-8 font-sans">
-      <h1 className="text-2xl font-semibold">Frost · revoke permission</h1>
-      <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xl text-center">
-        Submits <code className="text-xs">disableDelegation()</code> on the Base Sepolia
-        Delegation Manager. Gas paid by your connected account.
-      </p>
-
-      {state.kind === "parsing" && <p>Decoding permission context…</p>}
-      {state.kind === "parse-error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">{state.message}</pre>
-      )}
+    <ConnectShell
+      eyebrow="Bridge · Revoke"
+      title="Revoke permission"
+      subtitle={
+        <>
+          Submits <code className="mono">disableDelegation()</code> on the Base Sepolia
+          Delegation Manager. Gas paid by your connected account.
+        </>
+      }
+    >
+      {state.kind === "parsing" && <p className="status-line">Decoding permission context…</p>}
+      {state.kind === "parse-error" && <pre className="code-block err">{state.message}</pre>}
 
       {"root" in state && <DelegationCard d={state.root} label="root delegation (will be disabled)" />}
       {"all" in state && state.all.length > 1 && (
-        <details className="max-w-xl w-full">
-          <summary className="text-xs text-zinc-500 cursor-pointer">
-            full chain ({state.all.length} delegations)
-          </summary>
-          <div className="space-y-2 mt-2">
+        <details className="connect-debug">
+          <summary>full chain ({state.all.length} delegations)</summary>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
             {state.all.slice(1).map((d, i) => (
               <DelegationCard key={i} d={d} label={`chain[${i + 1}]`} />
             ))}
@@ -229,37 +229,36 @@ function RevokeInner() {
         </details>
       )}
 
-      {state.kind === "waiting-mm" && <p>Detecting MetaMask Flask…</p>}
-      {state.kind === "no-flask" && (
-        <p className="text-sm text-red-700">MetaMask Flask required.</p>
-      )}
+      {state.kind === "waiting-mm" && <p className="status-line">Detecting MetaMask Flask…</p>}
+      {state.kind === "no-flask" && <p className="status-line txt-err">MetaMask Flask required.</p>}
       {state.kind === "ready" && (
-        <button onClick={submit} className="px-4 py-2 rounded bg-red-700 text-white">
-          Revoke in MetaMask
-        </button>
+        <button onClick={submit} className="frost-btn danger">Revoke in MetaMask</button>
       )}
-      {state.kind === "submitting" && <p>Awaiting MetaMask approval…</p>}
-      {state.kind === "mining" && <p>Submitted. tx <code className="text-xs">{state.txHash}</code></p>}
-      {state.kind === "posting" && <p>Posting tx hash back to Frost…</p>}
+      {state.kind === "submitting" && <p className="status-line">Awaiting MetaMask approval…</p>}
+      {state.kind === "mining" && (
+        <p className="status-line">Submitted. tx <span className="mono">{shortHex(state.txHash, 8, 6)}</span></p>
+      )}
+      {state.kind === "posting" && <p className="status-line">Posting tx hash back to Frost…</p>}
       {state.kind === "done" && (
-        <div className="text-center">
-          <p className="text-green-700">Revoked. tx <a className="underline" target="_blank" rel="noreferrer"
-            href={`https://sepolia.basescan.org/tx/${state.txHash}`}>{shortHex(state.txHash, 8, 6)}</a></p>
+        <div className="connect-sub">
+          <p className="txt-ok">
+            Revoked. tx{" "}
+            <a className="connect-link" target="_blank" rel="noreferrer"
+              href={`https://sepolia.basescan.org/tx/${state.txHash}`}>{shortHex(state.txHash, 8, 6)}</a>
+          </p>
           {state.callbackStatus > 0 && (
-            <p className="text-xs text-zinc-500">Callback HTTP {state.callbackStatus}.</p>
+            <p className="txt-muted">Callback HTTP {state.callbackStatus}.</p>
           )}
         </div>
       )}
-      {state.kind === "error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">{state.message}</pre>
-      )}
-    </main>
+      {state.kind === "error" && <pre className="code-block err">{state.message}</pre>}
+    </ConnectShell>
   );
 }
 
 export default function RevokePage() {
   return (
-    <Suspense fallback={<p className="p-8">Loading…</p>}>
+    <Suspense fallback={<p className="connect-main">Loading…</p>}>
       <RevokeInner />
     </Suspense>
   );

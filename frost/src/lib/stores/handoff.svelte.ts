@@ -1,22 +1,36 @@
+import type { CompiledSpec, CompileResult } from "@frost/agent/browser";
+
 /**
- * One-shot hand-off from the master-agent chat to the Runtime Manager: the chat
- * stashes a workflow string here, navigates to /runtime, and the runtime page
- * `take()`s it on mount to prefill + auto-compile. In-memory only (single session).
+ * One-shot hand-off from the master-agent chat to the Runtime Manager. The chat
+ * stashes a payload here, navigates to /runtime, and the runtime page `take()`s it
+ * on mount. When the master already compiled a ready spec in chat, it travels too —
+ * so /runtime runs it directly instead of recompiling (Option B). In-memory only.
  */
+export type HandoffPayload = {
+  /** The natural-language workflow (always present). */
+  workflow: string;
+  /** A ready, compiled spec from the chat-side master loop, if any. */
+  spec?: CompiledSpec;
+  /** The compile result behind `spec` (for the byte-tied review). */
+  compileResult?: CompileResult;
+  /** Clarification answers accumulated in chat. */
+  answers?: Record<string, string>;
+};
+
 function createHandoff() {
-	let workflow = $state<string | undefined>(undefined);
+	let payload = $state<HandoffPayload | undefined>(undefined);
 	return {
 		get pending() {
-			return workflow !== undefined;
+			return payload !== undefined;
 		},
-		set(w: string) {
-			workflow = w;
+		set(p: HandoffPayload) {
+			payload = p;
 		},
 		/** Read and clear. */
-		take(): string | undefined {
-			const w = workflow;
-			workflow = undefined;
-			return w;
+		take(): HandoffPayload | undefined {
+			const p = payload;
+			payload = undefined;
+			return p;
 		},
 	};
 }

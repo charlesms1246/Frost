@@ -16,6 +16,7 @@
   "dependencies": {
     "@frost/agent": "file:../agent",
     "@frost/sdk": "file:../sdk",
+    "@metamask/smart-accounts-kit": "^1.6.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "viem": "^2.51.3"

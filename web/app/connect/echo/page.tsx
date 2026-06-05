@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import ConnectShell from "../_components/ConnectShell";
 
 function EchoInner() {
   const params = useSearchParams();
@@ -55,25 +56,21 @@ function EchoInner() {
   }, []);
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center gap-4 p-8 font-sans">
-      <h1 className="text-2xl font-semibold">Frost · /connect/echo</h1>
-      <p className="text-sm text-zinc-600">
-        Round-trip smoke test for the Tauri ↔ browser bridge.
-      </p>
-      <dl className="text-xs grid grid-cols-[max-content_1fr] gap-x-3 max-w-xl break-all">
-        <dt className="text-zinc-500">challenge</dt><dd>{challenge}</dd>
-        <dt className="text-zinc-500">port</dt><dd>{port}</dd>
-        <dt className="text-zinc-500">params</dt><dd>{userParams}</dd>
-        <dt className="text-zinc-500">status</dt><dd>{status}</dd>
-        <dt className="text-zinc-500">detail</dt><dd>{detail}</dd>
-      </dl>
-      <button
-        onClick={send}
-        className="px-4 py-2 rounded bg-zinc-900 text-white text-sm"
-      >
-        Re-send callback
-      </button>
-    </main>
+    <ConnectShell
+      eyebrow="Bridge · Echo"
+      title="Round-trip"
+      subtitle="Smoke test for the Tauri ↔ browser bridge."
+    >
+      <div className="connect-card">
+        <div className="card-title">Callback</div>
+        <div className="kv"><span className="k">challenge</span><span className="v mono">{challenge || "—"}</span></div>
+        <div className="kv"><span className="k">port</span><span className="v mono">{port || "—"}</span></div>
+        <div className="kv"><span className="k">params</span><span className="v mono">{userParams}</span></div>
+        <div className="kv"><span className="k">status</span><span className="v mono">{status}</span></div>
+        <div className="kv"><span className="k">detail</span><span className="v mono">{detail || "—"}</span></div>
+      </div>
+      <button onClick={send} className="frost-btn">Re-send callback</button>
+    </ConnectShell>
   );
 }
 
@@ -83,7 +80,7 @@ function safeParse(s: string): unknown {
 
 export default function EchoPage() {
   return (
-    <Suspense fallback={<p className="p-8">Loading…</p>}>
+    <Suspense fallback={<p className="connect-main">Loading…</p>}>
       <EchoInner />
     </Suspense>
   );

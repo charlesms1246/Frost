@@ -12,7 +12,11 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { createPublicClient, createWalletClient, custom, http } from "viem";
+import { baseSepolia } from "viem/chains";
+import { erc7715ProviderActions } from "@metamask/smart-accounts-kit/actions";
 import { detectMetaMask, type MMDetection } from "../_lib/detect-mm";
+import ConnectShell from "../_components/ConnectShell";
 
 const BASE_SEPOLIA_CHAIN_HEX = "0x14a34"; // 84532
 
@@ -45,6 +49,7 @@ type State =
   | { kind: "waiting-mm"; spec: PermissionRequest[] }
   | { kind: "no-flask"; spec: PermissionRequest[]; detection: MMDetection }
   | { kind: "ready"; spec: PermissionRequest[]; detection: Extract<MMDetection, { kind: "flask-ok" }> }
+  | { kind: "checking"; spec: PermissionRequest[] }
   | { kind: "requesting"; spec: PermissionRequest[] }
   | { kind: "posting"; granted: unknown }
   | { kind: "done"; granted: unknown; callbackStatus: number }
@@ -74,6 +79,36 @@ function parseSpec(rawParams: string): PermissionRequest[] {
   return parsed as PermissionRequest[];
 }
 
+/**
+ * Map our Flask-13.32 raw spec (hex amounts, chainId hex, expiry-in-rules) to the
+ * smart-accounts-kit `requestExecutionPermissions` input (bigint amounts, chainId
+ * number, top-level expiry). Using the kit serializes the request the way the
+ * installed MetaMask gator expects — the raw `provider.request` path was being
+ * rejected with "cannot sign delegations for internal accounts".
+ */
+function specToKitRequest(req: PermissionRequest): Record<string, unknown> {
+  const expiry = req.rules.find((r): r is ExpiryRule => r.type === "expiry");
+  const d = req.permission.data as Partial<Erc20StreamData>;
+  const data: Record<string, unknown> = {
+    amountPerSecond: BigInt(d.amountPerSecond ?? "0x0"),
+    maxAmount: BigInt(d.maxAmount ?? "0x0"),
+    initialAmount: BigInt(d.initialAmount ?? "0x0"),
+  };
+  if (d.tokenAddress) data.tokenAddress = d.tokenAddress;
+  if (typeof d.startTime === "number") data.startTime = d.startTime;
+  if (d.justification) data.justification = d.justification;
+  return {
+    chainId: Number(req.chainId),
+    to: req.to,
+    ...(expiry ? { expiry: expiry.data.timestamp } : {}),
+    permission: {
+      type: req.permission.type,
+      isAdjustmentAllowed: req.permission.isAdjustmentAllowed,
+      data,
+    },
+  };
+}
+
 function shortHex(s: string, head = 6, tail = 4): string {
   if (!s.startsWith("0x") || s.length <= head + tail + 2) return s;
   return `${s.slice(0, head + 2)}…${s.slice(-tail)}`;
@@ -92,15 +127,15 @@ function chainName(hex: string): string {
   return `chain ${hex}`;
 }
 
-function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: number }) {
+function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: number | null }) {
   const expiry = req.rules.find((r): r is ExpiryRule => r.type === "expiry");
-  const expirySecs = expiry ? expiry.data.timestamp - nowSecs : null;
+  const expirySecs = expiry && nowSecs !== null ? expiry.data.timestamp - nowSecs : null;
   const isErc20 = req.permission.type === "erc20-token-stream";
   const data = req.permission.data as Partial<Erc20StreamData>;
 
   return (
-    <div className="border border-zinc-300 dark:border-zinc-700 rounded p-4 text-sm space-y-1.5 max-w-xl w-full">
-      <div className="font-semibold text-base mb-2">{req.permission.type}</div>
+    <div className="connect-card">
+      <div className="card-title">{req.permission.type}</div>
       <Row k="chain" v={chainName(req.chainId)} />
       <Row k="delegate" v={shortHex(req.to)} mono />
       {isErc20 && data.tokenAddress && <Row k="token" v={shortHex(data.tokenAddress)} mono />}
@@ -112,9 +147,7 @@ function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: 
       {expirySecs !== null && <Row k="expires in" v={formatDuration(expirySecs)} />}
       <Row k="adjustable" v={req.permission.isAdjustmentAllowed ? "yes" : "no"} />
       {data.justification && (
-        <div className="pt-2 text-xs text-zinc-600 dark:text-zinc-400 italic">
-          “{data.justification}”
-        </div>
+        <p className="app-quote" style={{ marginTop: 8 }}>“{data.justification}”</p>
       )}
     </div>
   );
@@ -122,9 +155,9 @@ function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: 
 
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
-    <div className="grid grid-cols-[8rem_1fr] gap-2">
-      <span className="text-zinc-500">{k}</span>
-      <span className={mono ? "font-mono break-all" : "break-words"}>{v}</span>
+    <div className="kv">
+      <span className="k">{k}</span>
+      <span className={mono ? "v mono" : "v"}>{v}</span>
     </div>
   );
 }
@@ -148,7 +181,14 @@ function GrantInner() {
       ? { kind: "waiting-mm", spec: parsedSpec.spec }
       : { kind: "spec-error", message: parsedSpec.error },
   );
-  const [nowSecs] = useState(() => Math.floor(Date.now() / 1000));
+  // Client-only — computing the clock during SSR makes the rendered "expires in"
+  // text differ from the client render (hydration mismatch). Stay null until mounted.
+  const [nowSecs, setNowSecs] = useState<number | null>(null);
+  useEffect(() => {
+    // Defer out of the effect body (react-hooks/set-state-in-effect); client-only so
+    // SSR and first client render both omit the clock-derived "expires in" text.
+    queueMicrotask(() => setNowSecs(Math.floor(Date.now() / 1000)));
+  }, []);
 
   useEffect(() => {
     if (!parsedSpec.ok) return;
@@ -164,7 +204,9 @@ function GrantInner() {
     setState({ kind: "requesting", spec });
     try {
       const provider = detection.detail.provider;
-      await provider.request({ method: "eth_requestAccounts" });
+      const accounts = (await provider.request({ method: "eth_requestAccounts" })) as `0x${string}`[];
+      const account = accounts?.[0];
+      if (!account) throw new Error("No account selected in MetaMask.");
       const targetChain = spec[0]?.chainId ?? BASE_SEPOLIA_CHAIN_HEX;
       try {
         await provider.request({
@@ -188,10 +230,37 @@ function GrantInner() {
           throw switchErr;
         }
       }
-      const granted = await provider.request({
-        method: "wallet_requestExecutionPermissions",
-        params: spec,
-      });
+
+      const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+      const walletClient = createWalletClient({ account, chain: baseSepolia, transport: custom(provider) });
+
+      // CHECK ONLY — never dapp-upgrade. MetaMask owns the smart-account upgrade UX:
+      // a raw EIP-7702 authorization tx sets the account's code but does NOT register it
+      // as a MetaMask-managed Smart Account, which makes requestExecutionPermissions hang
+      // or fail. So we only detect whether the account is already upgraded (presence of
+      // 7702 code) and let MetaMask drive the grant; if it's a plain EOA, we ask the user
+      // to switch to a Smart Account in MetaMask (the only reliable upgrade path).
+      setState({ kind: "checking", spec });
+      const code = await publicClient.getCode({ address: account }).catch(() => undefined);
+      if (!code || code === "0x") {
+        setState({
+          kind: "error",
+          message:
+            "This MetaMask account isn't a Smart Account yet. In MetaMask, switch this " +
+            "account to a Smart Account (account menu → “Switch to smart account”), " +
+            "then retry. Frost can't upgrade it for you — MetaMask must manage the upgrade " +
+            "for the delegation grant to work.",
+        });
+        return;
+      }
+
+      // GRANT via the kit (correct request serialization for the installed MetaMask gator).
+      setState({ kind: "requesting", spec });
+      const wallet7715 = walletClient.extend(erc7715ProviderActions());
+      const granted = await wallet7715.requestExecutionPermissions(
+        spec.map(specToKitRequest) as never,
+      );
+
       setState({ kind: "posting", granted });
       const res = await fetch(`http://localhost:${port}/callback`, {
         method: "POST",
@@ -200,77 +269,77 @@ function GrantInner() {
       });
       setState({ kind: "done", granted, callbackStatus: res.status });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : JSON.stringify(e);
+      const raw = e instanceof Error ? e.message : JSON.stringify(e);
+      const isInternal = /internal account|sign delegations/i.test(raw);
+      const message = isInternal
+        ? `MetaMask refused to sign the delegation. This account couldn't be used as a Smart Account ` +
+          `(EIP-7702 gator implementation). Try: in MetaMask, switch this account to a Smart Account ` +
+          `and ensure it has a little Base Sepolia ETH for the one-time upgrade, then retry.\n\n(original: ${raw})`
+        : raw;
       setState({ kind: "error", message });
     }
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-start gap-4 p-8 font-sans">
-      <h1 className="text-2xl font-semibold">Frost · review permission request</h1>
-      <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xl text-center">
-        Frost is requesting a delegated execution permission. Review the terms below,
-        then approve in MetaMask Flask.
-      </p>
+    <ConnectShell
+      eyebrow="Bridge · Permission"
+      title="Review request"
+      subtitle="Frost is requesting a delegated execution permission. Review the terms below, then approve in MetaMask Flask."
+    >
+      {state.kind === "parsing" && <p className="status-line">Parsing spec…</p>}
 
-      {state.kind === "parsing" && <p>Parsing spec…</p>}
-
-      {state.kind === "spec-error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">{state.message}</pre>
-      )}
+      {state.kind === "spec-error" && <pre className="code-block err">{state.message}</pre>}
 
       {(state.kind === "waiting-mm" ||
         state.kind === "no-flask" ||
         state.kind === "ready" ||
+        state.kind === "checking" ||
         state.kind === "requesting" ||
         state.kind === "posting" ||
         state.kind === "done") &&
         "spec" in state &&
         state.spec.map((req, i) => <PermissionPreview key={i} req={req} nowSecs={nowSecs} />)}
 
-      {state.kind === "waiting-mm" && <p>Detecting MetaMask Flask…</p>}
+      {state.kind === "waiting-mm" && <p className="status-line">Detecting MetaMask Flask…</p>}
 
       {state.kind === "no-flask" && (
-        <p className="text-sm text-red-700">
+        <p className="status-line txt-err">
           MetaMask Flask required (detected: {state.detection.kind}).
         </p>
       )}
 
       {state.kind === "ready" && (
-        <button onClick={approve} className="px-4 py-2 rounded bg-zinc-900 text-white">
-          Approve in MetaMask
-        </button>
+        <button onClick={approve} className="frost-btn">Approve in MetaMask</button>
       )}
 
-      {state.kind === "requesting" && <p>Awaiting MetaMask approval…</p>}
-      {state.kind === "posting" && <p>Posting signed permission back to Frost…</p>}
+      {state.kind === "checking" && <p className="status-line">Checking smart-account status…</p>}
+      {state.kind === "requesting" && <p className="status-line">Awaiting MetaMask approval…</p>}
+      {state.kind === "posting" && <p className="status-line">Posting signed permission back to Frost…</p>}
 
       {state.kind === "done" && (
-        <div className="text-center max-w-2xl">
-          <p className="text-green-700 mb-2">Done. Callback HTTP {state.callbackStatus}.</p>
-          <p className="text-xs text-zinc-500">You can close this tab.</p>
+        <div className="connect-sub">
+          <p className="txt-ok">Done. Callback HTTP {state.callbackStatus}.</p>
+          <p className="txt-muted">You can close this tab.</p>
         </div>
       )}
 
-      {state.kind === "error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">{state.message}</pre>
-      )}
+      {state.kind === "error" && <pre className="code-block err">{state.message}</pre>}
 
-      <details className="mt-4 max-w-2xl w-full">
-        <summary className="text-xs text-zinc-500 cursor-pointer">debug</summary>
-        <dl className="text-xs grid grid-cols-[max-content_1fr] gap-x-3 break-all mt-2">
-          <dt className="text-zinc-500">challenge</dt><dd>{challenge || "(missing)"}</dd>
-          <dt className="text-zinc-500">port</dt><dd>{port || "(missing)"}</dd>
-          <dt className="text-zinc-500">state</dt><dd>{state.kind}</dd>
-        </dl>
+      <details className="connect-debug">
+        <summary>debug</summary>
+        <div className="connect-card" style={{ marginTop: 10 }}>
+          <div className="kv"><span className="k">challenge</span><span className="v mono">{challenge || "(missing)"}</span></div>
+          <div className="kv"><span className="k">port</span><span className="v mono">{port || "(missing)"}</span></div>
+          <div className="kv"><span className="k">state</span><span className="v mono">{state.kind}</span></div>
+        </div>
       </details>
-    </main>
+    </ConnectShell>
   );
 }
 
 export default function GrantPermissionsPage() {
   return (
-    <Suspense fallback={<p className="p-8">Loading…</p>}>
+    <Suspense fallback={<p className="connect-main">Loading…</p>}>
       <GrantInner />
     </Suspense>
   );

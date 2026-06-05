@@ -5,17 +5,37 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { profile } from "$lib/stores/profile.svelte";
+  import { config } from "$lib/stores/config.svelte";
   import { syncProfileToHosted, fileToDataUrl } from "$lib/profile-sync";
+  import { captureMetaMaskAuthority } from "$lib/wallet-connect";
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Camera from "@lucide/svelte/icons/camera";
   import Wallet from "@lucide/svelte/icons/wallet";
+  import ShieldCheck from "@lucide/svelte/icons/shield-check";
 
   let displayName = $state(profile.value.displayName);
   let email = $state(profile.value.email);
   let avatarDataUrl = $state(profile.value.avatarDataUrl);
   let walletAddress = $state(profile.value.walletAddress ?? "");
   let submitting = $state(false);
+  let connecting = $state(false);
   let error = $state("");
+
+  const granted = $derived(!!config.value.metaMaskGrant);
+
+  async function connectWallet() {
+    if (connecting) return;
+    connecting = true;
+    error = "";
+    try {
+      const { granter } = await captureMetaMaskAuthority();
+      if (granter) walletAddress = granter;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      connecting = false;
+    }
+  }
 
   const emailOk = $derived(
     email.trim() === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()),
@@ -142,15 +162,19 @@
           type="button"
           variant="outline"
           size="default"
-          title="Wallet connect lands via the bridge"
-          disabled
+          onclick={connectWallet}
+          disabled={connecting}
         >
-          <Wallet class="size-4" /> Connect
+          {#if connecting}<Loader2 class="size-4 animate-spin" />{:else if granted}<ShieldCheck class="size-4 text-primary" />{:else}<Wallet class="size-4" />{/if}
+          {granted ? "Connected" : "Connect"}
         </Button>
       </div>
       <p class="text-[10px] text-muted-foreground">
-        Wallet connect runs through the MetaMask bridge — coming to this flow
-        next.
+        {#if granted}
+          Authorized — a scoped, revocable ${(Number(config.value.grantMaxAmount ?? 0) / 1e6).toFixed(0)} USDC spending grant from your MetaMask.
+        {:else}
+          Connect approves a scoped, revocable spending grant from your MetaMask Smart Account — no keys to hand over.
+        {/if}
       </p>
     </div>
 

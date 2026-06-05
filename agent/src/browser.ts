@@ -172,10 +172,28 @@ export {
 export {
   OneShotRestMethods,
   OneShotRestDelegations,
+  OneShotRestWallets,
   type OneShotRestConfig,
   type OneShotFetch,
   type RedelegateResult,
+  type CreatedWallet,
 } from "./executor/oneshot-rest.js";
+export {
+  RelayerClient,
+  relayerUrlForChain,
+  toRelayerJson,
+  RELAYER_MAINNET_URL,
+  RELAYER_TESTNET_URL,
+  type RelayerConfig,
+  type RelayerFetch,
+  type ChainCapabilities,
+  type RelayerFeeData,
+  type Estimate7710Result,
+  type RelayerExecution,
+  type RelayerTransaction,
+  type Send7710Params,
+  type RelayerStatus,
+} from "./executor/relayer.js";
 export {
   encodeProposedCaveats,
   defaultCaveatEncoder,

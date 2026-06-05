@@ -36,8 +36,17 @@ export type FrostConfig = {
 	// Auto-provisioned custodial signing wallet (no private key client-side)
 	signingWalletId?: string;
 	signingWalletAddress?: string;
+	// Captured ERC-7715 authority from the user's MetaMask (the session's root authority).
+	// `metaMaskGrant` is the raw granted delegation (JSON); the rest is the request scope.
+	sessionAccount?: string; // the agent session account the permission was granted TO
+	metaMaskGrant?: string;
+	grantTokenAddress?: string;
+	grantMaxAmount?: string; // token base units
+	grantExpiryUnix?: number;
 	// Advanced
 	rpcUrl: string;
+	// Optional BaseScan/Etherscan-v2 key — enables the master agent's contract lookups
+	basescanApiKey: string;
 	// Onboarding completed via /setup
 	onboarded: boolean;
 };
@@ -54,6 +63,7 @@ const DEFAULTS: FrostConfig = {
 	groqApiKey: "",
 	fallbackModels: ["openai/gpt-4o-mini", "", ""],
 	rpcUrl: "https://base-sepolia.publicnode.com",
+	basescanApiKey: "",
 	onboarded: false,
 };
 
@@ -112,7 +122,9 @@ function createConfig() {
 		},
 		/** The model the runtime uses today (primary Venice, else fallback). */
 		get primaryModel() {
-			return current.veniceModels[0] || current.fallbackModels[0];
+			const veniceUsable =
+				current.veniceApiKey.trim() !== "" && current.veniceModels[0].trim() !== "";
+			return veniceUsable ? current.veniceModels[0] : current.fallbackModels[0];
 		},
 		/** A usable thinking path exists: Venice OR the chosen fallback provider. */
 		get ready() {

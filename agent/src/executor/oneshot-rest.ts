@@ -132,6 +132,67 @@ export class OneShotRestMethods implements OneShotContractMethodsApi {
 }
 
 /**
+ * Server-wallet creation/listing via the 1Shot REST API (webview-safe — no Node SDK).
+ * Creates a CUSTODIAL wallet (1Shot holds the key) scoped to a business + chain.
+ *
+ * Path A use: the SESSION wallet that becomes the DELEGATE (`to`) of the user's
+ * ERC-7715 grant. 1Shot can then sign the redelegation to the executor
+ * (`redelegateWithDelegationData` requires the wallet to BE the grant's delegate).
+ * Routes mirror the SDK's `wallets.create`/`wallets.list`
+ * (`POST/GET /business/{businessId}/wallets`).
+ */
+export interface CreatedWallet {
+  walletId: string;
+  accountAddress: string;
+  name?: string;
+}
+
+export class OneShotRestWallets {
+  private readonly auth: OneShotAuth;
+
+  constructor(config: OneShotRestConfig) {
+    this.auth = new OneShotAuth(config);
+  }
+
+  async create(
+    businessId: string,
+    params: { chainId: number; name: string; description?: string },
+  ): Promise<CreatedWallet> {
+    const token = await this.auth.token();
+    const body: Record<string, unknown> = { chainId: params.chainId, name: params.name };
+    if (params.description !== undefined) body["description"] = params.description;
+    const res = await this.auth.fetchImpl(`${this.auth.baseUrl}/business/${businessId}/wallets`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`1Shot create wallet failed: ${res.status} ${res.statusText}`);
+    }
+    const w = (await res.json()) as { id: string; accountAddress: string; name?: string };
+    return { walletId: w.id, accountAddress: w.accountAddress, ...(w.name !== undefined ? { name: w.name } : {}) };
+  }
+
+  /** Read-only list (paginated `{ response: Wallet[] }`) — used to keep provisioning idempotent. */
+  async list(businessId: string): Promise<CreatedWallet[]> {
+    const token = await this.auth.token();
+    const res = await this.auth.fetchImpl(`${this.auth.baseUrl}/business/${businessId}/wallets`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      throw new Error(`1Shot list wallets failed: ${res.status} ${res.statusText}`);
+    }
+    const body = (await res.json()) as { response?: Array<{ id: string; accountAddress: string; name?: string }> };
+    return (body.response ?? []).map((w) => ({
+      walletId: w.id,
+      accountAddress: w.accountAddress,
+      ...(w.name !== undefined ? { name: w.name } : {}),
+    }));
+  }
+}
+
+/**
  * The redelegation step of the ERC-7710 chain. The session wallet (holding the
  * user's ERC-7715 grant) redelegates to the executor's address; the returned chain
  * (root→leaf) is passed as `delegationData` to `executeAsDelegator`.
