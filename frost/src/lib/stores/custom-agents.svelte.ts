@@ -77,6 +77,11 @@ function createCustomAgents() {
 			agents = agents.filter((a) => a.role !== role);
 			persist();
 		},
+		/** Wipe all saved agents (used on sign-out). */
+		clearAll() {
+			agents = [];
+			persist();
+		},
 	};
 }
 

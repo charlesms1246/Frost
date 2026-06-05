@@ -6,11 +6,29 @@
   import { Label } from "$lib/components/ui/label";
   import { profile } from "$lib/stores/profile.svelte";
   import { config } from "$lib/stores/config.svelte";
+  import { captureMetaMaskAuthority } from "$lib/wallet-connect";
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Wallet from "@lucide/svelte/icons/wallet";
 
   let email = $state(profile.value.email);
   let submitting = $state(false);
+  let connecting = $state(false);
+  let walletError = $state("");
+
+  async function connectWallet() {
+    if (connecting) return;
+    connecting = true;
+    walletError = "";
+    try {
+      const { granter } = await captureMetaMaskAuthority();
+      if (granter) profile.update({ walletAddress: granter });
+      await goto(config.onboarded ? "/chat" : "/setup");
+    } catch (e) {
+      walletError = e instanceof Error ? e.message : String(e);
+    } finally {
+      connecting = false;
+    }
+  }
 
   const hasProfile = $derived(profile.signedIn);
   const initials = $derived((profile.value.displayName || "").trim().slice(0, 2).toUpperCase() || "·");
@@ -59,9 +77,11 @@
       Sign in
     </Button>
 
-    <Button type="button" size="lg" variant="outline" disabled title="Wallet connect lands via the bridge">
-      <Wallet class="size-4" /> Sign in with wallet
+    <Button type="button" size="lg" variant="outline" onclick={connectWallet} disabled={connecting}>
+      {#if connecting}<Loader2 class="size-4 animate-spin" />{:else}<Wallet class="size-4" />{/if}
+      Sign in with wallet
     </Button>
+    {#if walletError}<p class="text-xs text-destructive break-all">{walletError}</p>{/if}
   </form>
 
   <p class="mt-6 text-center text-sm text-muted-foreground">

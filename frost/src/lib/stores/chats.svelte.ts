@@ -39,8 +39,9 @@ function titleFrom(text: string): string {
 }
 
 function createChats() {
-	let conversations = $state<Conversation[]>(load());
-	let currentId = $state<string | undefined>(conversations[0]?.id);
+	const initial = load();
+	let conversations = $state<Conversation[]>(initial);
+	let currentId = $state<string | undefined>(initial[0]?.id);
 
 	function persist() {
 		if (browser) localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));

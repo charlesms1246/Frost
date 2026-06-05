@@ -38,6 +38,13 @@ export interface MetaMaskGrantOptions {
   maxAmountHex: string;
   /** Stream rate, hex base-units per second. */
   amountPerSecondHex: string;
+  /**
+   * Amount available IMMEDIATELY at t=0, hex base-units. The ERC-20 streaming enforcer
+   * only releases `initialAmount + rate·elapsed` (capped at maxAmount), so a relayer
+   * redemption seconds after the grant needs this front-loaded or it reverts
+   * `ERC20StreamingEnforcer:allowance-exceeded`. Omitted ⇒ Rust default `0x0`.
+   */
+  initialAmountHex?: string;
   /** Session lifetime, seconds (becomes the ERC-7715 expiry rule). */
   expirySecs: number;
   /** Human justification shown in the bridge preview + MetaMask. */
@@ -70,6 +77,7 @@ export async function requestMetaMaskGrant(
     expiry_secs: opts.expirySecs,
     justification: opts.justification,
   };
+  if (opts.initialAmountHex) specArgs["initial_amount_hex"] = opts.initialAmountHex;
   if (opts.chainIdHex) specArgs["chain_id_hex"] = opts.chainIdHex;
   const spec = await invoke<unknown>("build_erc20_token_stream_permission", { args: specArgs });
 

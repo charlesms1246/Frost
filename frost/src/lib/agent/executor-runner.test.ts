@@ -6,7 +6,9 @@ import {
   type CompiledSpec,
   type OneShotFetch,
 } from "@frost/agent/browser";
-import { makeExecutorRunner, makeSimulatedExecutorRunner } from "./executor-runner";
+import { makeExecutorRunner, makeRelayerExecutorRunner, makeSimulatedExecutorRunner } from "./executor-runner";
+import { usdcTransferWork } from "./relayer-exec";
+import { RelayerClient } from "@frost/agent/browser";
 import { vi } from "vitest";
 
 /**
@@ -102,5 +104,61 @@ describe("makeSimulatedExecutorRunner (HITL demo)", () => {
     const res = await r({ behavior: "executor", outcome });
     expect(requestApproval).not.toHaveBeenCalled();
     expect(res.ran).toBe(true);
+  });
+});
+
+describe("makeRelayerExecutorRunner (keyless public-relayer path)", () => {
+  const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
+  const granted = [{ context: "0xCAFE" }];
+  const decode = () => [{ delegate: "0xf1ef", salt: 1n }];
+
+  function relayerClient() {
+    const c = new RelayerClient({ url: "http://test", fetchImpl: async () => ({ ok: true, status: 200, async json() { return {}; } }) });
+    Object.assign(c, {
+      getCapabilities: vi.fn(async () => ({
+        "84532": { feeCollector: ("0x" + "ee".repeat(20)) as `0x${string}`, targetAddress: ("0x" + "f1".repeat(20)) as `0x${string}`, tokens: [{ address: USDC, symbol: "USDC", decimals: "6" }] },
+      })),
+      estimate7710Transaction: vi.fn(async () => ({ success: true, requiredPaymentAmount: "10000", context: "0xlock" })),
+      send7710Transaction: vi.fn(async () => "0x" + "ab".repeat(32)),
+    });
+    return c;
+  }
+
+  const work = () => [usdcTransferWork(USDC, "0x2222222222222222222222222222222222222222", 1_000_000n)];
+
+  it("submits a sub-threshold action via the relayer without the gate", async () => {
+    const requestApproval = vi.fn();
+    const r = makeRelayerExecutorRunner({ granted, spec, notionalUsdc: 1_000_000n, work: work(), requestApproval, deps: { client: relayerClient(), decode } });
+    const res = await r({ behavior: "executor", outcome });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(res.ran).toBe(true);
+    expect(res.detail).toMatch(/relayed 0x.* \(\$1\.00, fee 10000\)/);
+  });
+
+  it("pauses for HITL on an above-threshold action and submits after approval", async () => {
+    const requestApproval = vi.fn().mockResolvedValue(true);
+    const r = makeRelayerExecutorRunner({ granted, spec, notionalUsdc: 12_000_000n, work: work(), requestApproval, deps: { client: relayerClient(), decode } });
+    const res = await r({ behavior: "executor", outcome });
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(requestApproval.mock.calls[0]![0]).toMatchObject({ notionalUsdc: 12_000_000n });
+    expect(res.ran).toBe(true);
+  });
+
+  it("does not submit when the gate declines", async () => {
+    const send = vi.fn();
+    const client = relayerClient();
+    Object.assign(client, { send7710Transaction: send });
+    const r = makeRelayerExecutorRunner({ granted, spec, notionalUsdc: 12_000_000n, work: work(), requestApproval: async () => false, deps: { client, decode } });
+    const res = await r({ behavior: "executor", outcome });
+    expect(res.ran).toBe(false);
+    expect(res.detail).toMatch(/human declined/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("returns hitl_required when above threshold and no gate is wired", async () => {
+    const r = makeRelayerExecutorRunner({ granted, spec, notionalUsdc: 12_000_000n, work: work(), deps: { client: relayerClient(), decode } });
+    const res = await r({ behavior: "executor", outcome });
+    expect(res.ran).toBe(false);
+    expect(res.detail).toBe("hitl_required");
   });
 });

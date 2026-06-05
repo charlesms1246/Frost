@@ -31,10 +31,16 @@ describe("config store", () => {
     expect(fallbackKeyOf(config.value)).toBe("gsk");
   });
 
-  it("primaryModel prefers Venice, then fallback", () => {
+  it("primaryModel uses Venice only when Venice is usable (key + model), else fallback", () => {
     config.clear();
-    config.update({ veniceModels: ["v0", "", ""], fallbackModels: ["f0", "", ""] });
+    // Venice model set but NO key ⇒ Venice isn't usable, so the model id must not
+    // leak to the fallback provider (a Venice id is invalid on Groq/OpenRouter).
+    config.update({ veniceApiKey: "", veniceModels: ["v0", "", ""], fallbackModels: ["f0", "", ""] });
+    expect(config.primaryModel).toBe("f0");
+    // With a Venice key, the primary model is the Venice one.
+    config.update({ veniceApiKey: "vk" });
     expect(config.primaryModel).toBe("v0");
+    // Clearing the Venice model falls back again.
     config.update({ veniceModels: ["", "", ""] });
     expect(config.primaryModel).toBe("f0");
   });
