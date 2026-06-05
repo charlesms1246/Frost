@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-latest'
@@ -55,7 +55,7 @@ jobs:
         # libxdo-dev is required because src-tauri enables Tauri's `tray-icon` feature.
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
