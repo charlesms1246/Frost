@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OneShotRestMethods,
+  OneShotRestWallets,
   OneShotTransactionSubmitter,
   type OneShotFetch,
 } from "../src/browser.js";
@@ -106,5 +107,50 @@ describe("OneShotRestMethods", () => {
     });
     // The submitter passed the wallet id and decimal value through to REST.
     expect(JSON.parse(recorded[1]!.body!)).toEqual({ params: { x: 1 }, walletId: "wallet-77", value: "5" });
+  });
+});
+
+describe("OneShotRestWallets", () => {
+  it("creates a custodial wallet at /business/{id}/wallets and maps id→walletId", async () => {
+    const recorded: Recorded[] = [];
+    const fetchImpl: OneShotFetch = async (url, init) => {
+      recorded.push({ url, method: init.method, headers: init.headers, body: init.body });
+      if (url.endsWith("/token")) return ok({ access_token: "tok-1", expires_in: 3600 });
+      if (url.endsWith("/wallets") && init.method === "POST") {
+        return ok({ id: "wal-9", accountAddress: "0x" + "1".repeat(40), name: "frost-session-delegate" });
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    const wallets = new OneShotRestWallets({ ...config, fetchImpl });
+
+    const created = await wallets.create("biz-1", { chainId: 84532, name: "frost-session-delegate" });
+
+    const post = recorded[1]!;
+    expect(post.url).toBe("https://api.1shotapi.com/v0/business/biz-1/wallets");
+    expect(post.headers["Authorization"]).toBe("Bearer tok-1");
+    expect(JSON.parse(post.body!)).toEqual({ chainId: 84532, name: "frost-session-delegate" });
+    expect(created).toEqual({ walletId: "wal-9", accountAddress: "0x" + "1".repeat(40), name: "frost-session-delegate" });
+  });
+
+  it("lists wallets from the paginated { response } envelope", async () => {
+    const fetchImpl: OneShotFetch = async (url, init) => {
+      if (url.endsWith("/token")) return ok({ access_token: "t", expires_in: 3600 });
+      if (url.endsWith("/wallets") && init.method === "GET") {
+        return ok({ response: [{ id: "a", accountAddress: "0x" + "2".repeat(40), name: "one" }], page: 1, pageSize: 10 });
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    const list = await new OneShotRestWallets({ ...config, fetchImpl }).list("biz-1");
+    expect(list).toEqual([{ walletId: "a", accountAddress: "0x" + "2".repeat(40), name: "one" }]);
+  });
+
+  it("throws with the status on a failed create", async () => {
+    const fetchImpl: OneShotFetch = async (url) =>
+      url.endsWith("/token")
+        ? ok({ access_token: "t", expires_in: 3600 })
+        : { ok: false, status: 403, statusText: "Forbidden", async json() { return {}; } };
+    await expect(
+      new OneShotRestWallets({ ...config, fetchImpl }).create("biz", { chainId: 84532, name: "x" }),
+    ).rejects.toThrow(/create wallet failed: 403/);
   });
 });
