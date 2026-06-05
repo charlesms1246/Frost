@@ -18,6 +18,7 @@ import {
   type MMDetection,
   type Eip6963ProviderDetail,
 } from "../_lib/detect-mm";
+import ConnectShell from "../_components/ConnectShell";
 
 type State =
   | { kind: "detecting" }
@@ -114,99 +115,80 @@ function LoginInner() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center gap-4 p-8 font-sans">
-      <h1 className="text-2xl font-semibold">Frost · Connect</h1>
-
-      <dl className="text-xs grid grid-cols-[max-content_1fr] gap-x-3 max-w-xl break-all">
-        <dt className="text-zinc-500">mode</dt>
-        <dd>{isBridgeMode ? "bridge (Tauri callback)" : "standalone"}</dd>
+    <ConnectShell
+      eyebrow="Bridge · Connect"
+      title="Connect MetaMask"
+      subtitle="Link your MetaMask Flask wallet so Frost can request scoped, signed permissions."
+    >
+      <div className="connect-card">
+        <div className="card-title">Session</div>
+        <div className="kv"><span className="k">mode</span><span className="v">{isBridgeMode ? "bridge (Tauri callback)" : "standalone"}</span></div>
         {isBridgeMode && (
           <>
-            <dt className="text-zinc-500">challenge</dt>
-            <dd>{challenge}</dd>
-            <dt className="text-zinc-500">port</dt>
-            <dd>{port}</dd>
+            <div className="kv"><span className="k">challenge</span><span className="v mono">{challenge}</span></div>
+            <div className="kv"><span className="k">port</span><span className="v mono">{port}</span></div>
           </>
         )}
-        <dt className="text-zinc-500">state</dt>
-        <dd>{state.kind}</dd>
-      </dl>
+        <div className="kv"><span className="k">state</span><span className="v mono">{state.kind}</span></div>
+      </div>
 
-      {state.kind === "detecting" && <p>Detecting MetaMask Flask…</p>}
+      {state.kind === "detecting" && <p className="status-line">Detecting MetaMask Flask…</p>}
 
       {state.kind === "no-flask" && (
-        <div className="text-center max-w-md">
+        <div className="connect-sub">
           {state.detection.kind === "no-metamask" && (
-            <p className="mb-3">MetaMask Flask is not installed.</p>
+            <p className="txt-err">MetaMask Flask is not installed.</p>
           )}
           {state.detection.kind === "stable-only" && (
-            <p className="mb-3">
+            <p className="txt-err">
               Stable MetaMask detected
               {state.detection.version ? ` (v${state.detection.version})` : ""}, but
               Frost needs MetaMask Flask for ERC-7715 permission grants.
             </p>
           )}
           {state.detection.kind === "flask-too-old" && (
-            <p className="mb-3">
+            <p className="txt-err">
               MetaMask Flask v{state.detection.version} detected, but Frost requires
               v{FLASK_REQUIRED_VERSION} or newer.
             </p>
           )}
-          <a
-            href="https://metamask.io/flask"
-            target="_blank"
-            rel="noreferrer"
-            className="underline"
-          >
+          <a href="https://metamask.io/flask" target="_blank" rel="noreferrer" className="connect-link">
             Install / update MetaMask Flask
           </a>
         </div>
       )}
 
       {state.kind === "ready" && (
-        <button
-          onClick={connect}
-          className="px-4 py-2 rounded bg-zinc-900 text-white"
-        >
-          Connect MetaMask Flask
-        </button>
+        <button onClick={connect} className="frost-btn">Connect MetaMask Flask</button>
       )}
 
-      {state.kind === "connecting" && <p>Awaiting MetaMask approval…</p>}
+      {state.kind === "connecting" && <p className="status-line">Awaiting MetaMask approval…</p>}
       {state.kind === "posting" && (
-        <p>Posting connection back to Frost (HTTP localhost:{port})…</p>
+        <p className="status-line">Posting connection back to Frost (HTTP localhost:{port})…</p>
       )}
 
       {state.kind === "done" && (
-        <div className="text-center max-w-2xl">
-          <p className="text-green-700 mb-2">
-            Connected as <span className="font-mono">{state.address}</span> on chain{" "}
-            <span className="font-mono">{state.chainId}</span>.
+        <div className="connect-sub">
+          <p className="txt-ok">
+            Connected as <span className="mono">{state.address}</span> on chain{" "}
+            <span className="mono">{state.chainId}</span>.
           </p>
           {isBridgeMode ? (
-            <p className="text-xs text-zinc-500">
-              Callback HTTP {state.callbackStatus}. You can close this tab.
-            </p>
+            <p className="txt-muted">Callback HTTP {state.callbackStatus}. You can close this tab.</p>
           ) : (
-            <p className="text-xs text-zinc-500">
-              Flask v{state.flaskVersion}. (No Tauri bridge — standalone visit.)
-            </p>
+            <p className="txt-muted">Flask v{state.flaskVersion}. (No Tauri bridge — standalone visit.)</p>
           )}
         </div>
       )}
 
-      {state.kind === "error" && (
-        <pre className="text-xs text-red-700 max-w-2xl whitespace-pre-wrap">
-          {state.message}
-        </pre>
-      )}
-    </main>
+      {state.kind === "error" && <pre className="code-block err">{state.message}</pre>}
+    </ConnectShell>
   );
 }
 
 export default function ConnectLoginPage() {
   return (
-    <Suspense fallback={<p className="p-8">Loading…</p>}>
+    <Suspense fallback={<p className="connect-main">Loading…</p>}>
       <LoginInner />
     </Suspense>
   );
