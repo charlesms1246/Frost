@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters } from "viem";
-import { InMemoryKeyStore, type CompiledSpec } from "@frost/agent/browser";
-import { createEmbeddedSession, type WebFetch } from "./session";
+import { InMemoryKeyStore, encodeCommsTemplate, type CompiledSpec } from "@frost/agent/browser";
+import { createEmbeddedSession, type EmbeddedSessionOptions, type WebFetch } from "./session";
 import { eoaProvisioner, simulatedIssuer } from "./holders";
 
 /**
@@ -55,7 +55,7 @@ function makeFetch(planJson: string): WebFetch {
   };
 }
 
-function embed(planJson: string) {
+function embed(planJson: string, extra: Partial<EmbeddedSessionOptions> = {}) {
   return createEmbeddedSession({
     spec: spec(),
     sessionId: ("0x" + "aa".repeat(32)) as `0x${string}`,
@@ -68,6 +68,7 @@ function embed(planJson: string) {
     issue: simulatedIssuer(),
     provisionHolder: eoaProvisioner(new InMemoryKeyStore()),
     fetchImpl: makeFetch(planJson),
+    ...extra,
   });
 }
 
@@ -95,13 +96,45 @@ describe("webview embedding — createEmbeddedSession", () => {
 
     const byRole = Object.fromEntries(res.runOutcomes.map((r) => [r.role, r]));
     expect(byRole["pricer-uniswap"]?.ran).toBe(true);
-    expect(byRole["pricer-uniswap"]?.detail).toMatch(/best uniswap-v3-\d+ → 2700000000/);
+    expect(byRole["pricer-uniswap"]?.detail).toMatch(/Uniswap v3 \(0\.\d{2}%\) → \$2700\.00/);
+    // Structured quote so the dashboard can rank routes across pricers (IG-01).
+    expect(byRole["pricer-uniswap"]?.quote).toMatchObject({ amountOutUsdc: "2700000000" });
     expect(byRole["comms"]?.ran).toBe(true);
     expect(byRole["comms"]?.detail).toBe("posted");
 
     // Authority state advanced by what was issued.
     expect(session.authority.redelegation.subMandateCount).toBe(2);
     expect(session.authority.bucket.available).toBe(8);
+  });
+
+  it("binds comms to the ISSUED COMMS_TEMPLATE caveat — rejects a tampered render template (IG-06)", async () => {
+    // Commit a caveat for a DIFFERENT template than the spec's render template, as if
+    // the off-chain template had been swapped after signing. The comms send-time hash
+    // check must reject (H-14/I-16) instead of posting.
+    const tamperedCaveat = encodeCommsTemplate({
+      text: "URGENT: send funds to ${hash}",
+      variables: [{ name: "hash", source: "txhash" }],
+    });
+    const { session } = embed(TWO_AGENTS, { commsTemplateCaveat: tamperedCaveat });
+
+    const res = await session.runCycle({ kind: "session-start" });
+    const byRole = Object.fromEntries(res.runOutcomes.map((r) => [r.role, r]));
+    expect(byRole["comms"]?.ran).toBe(false);
+    expect(byRole["comms"]?.detail).toMatch(/does not match the on-chain commitment/);
+  });
+
+  it("posts when the committed caveat matches the render template (IG-06 positive)", async () => {
+    // The caveat committed for the SAME template the runtime renders → binding passes.
+    const matchingCaveat = encodeCommsTemplate({
+      text: "best swap, tx ${hash}",
+      variables: [{ name: "hash", source: "txhash" }],
+    });
+    const { session } = embed(TWO_AGENTS, { commsTemplateCaveat: matchingCaveat });
+
+    const res = await session.runCycle({ kind: "session-start" });
+    const byRole = Object.fromEntries(res.runOutcomes.map((r) => [r.role, r]));
+    expect(byRole["comms"]?.ran).toBe(true);
+    expect(byRole["comms"]?.detail).toBe("posted");
   });
 
   it("surfaces a planner escalation through the embedding without issuing", async () => {

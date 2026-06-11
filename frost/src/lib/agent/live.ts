@@ -7,7 +7,7 @@ import {
   type CompiledSpec,
   type SubMandateIssuer,
 } from "@frost/agent/browser";
-import { CAPABILITY, capabilityWhitelist, mandate, FROST_BASE_SEPOLIA } from "@frost/sdk";
+import { CAPABILITY, CAVEAT_TYPE, capabilityWhitelist, mandate, FROST_BASE_SEPOLIA, type Caveat } from "@frost/sdk";
 
 /**
  * The LIVE sub-mandate issuer — the real chain-write path that replaces
@@ -75,11 +75,16 @@ export interface RootMandateOptions {
 
 export async function createLiveRootMandate(
   opts: RootMandateOptions,
-): Promise<{ rootMandateId: Hex; txHash: Hex; holder: Address }> {
+): Promise<{ rootMandateId: Hex; txHash: Hex; holder: Address; commsTemplateCaveat?: Caveat }> {
   const account = privateKeyToAccount(opts.sessionPrivateKey);
   const transport = http(opts.rpcUrl);
   const wallet = createWalletClient({ account, chain: baseSepolia, transport });
   const publicClient = createPublicClient({ chain: baseSepolia, transport });
+
+  // Build the signed caveat array ONCE so the COMMS_TEMPLATE entry we hand to the
+  // comms sub-agent (for its send-time hash binding, IG-06/I-16) is provably the same
+  // bytes issued on-chain — not a re-encoding that could drift from the commitment.
+  const caveats = [capabilityWhitelist(MASTER_AGENT_CAPABILITIES), ...encodeRootCaveats(opts.spec)];
 
   // Cast the clients across the duplicate-viem-types boundary (see liveSdkIssuer).
   const { mandateId, txHash } = await mandate.issueMandate(
@@ -88,9 +93,15 @@ export async function createLiveRootMandate(
     FROST_BASE_SEPOLIA,
     {
       holder: account.address,
-      caveats: [capabilityWhitelist(MASTER_AGENT_CAPABILITIES), ...encodeRootCaveats(opts.spec)],
+      caveats,
       nonce: opts.nonce ?? BigInt(Date.now()),
     },
   );
-  return { rootMandateId: mandateId, txHash, holder: account.address };
+  const commsTemplateCaveat = caveats.find((c) => c.caveatType === CAVEAT_TYPE.COMMS_TEMPLATE);
+  return {
+    rootMandateId: mandateId,
+    txHash,
+    holder: account.address,
+    ...(commsTemplateCaveat ? { commsTemplateCaveat } : {}),
+  };
 }

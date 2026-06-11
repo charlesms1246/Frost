@@ -55,8 +55,12 @@ export interface ExecutorRunnerOptions {
     signature: string;
     /** USDC-equivalent value of the call (for maxValue + HITL checks). */
     notionalUsdc: bigint;
-    /** Named params for the 1Shot method. */
-    params: Record<string, unknown>;
+    /**
+     * Named params for the 1Shot method. A function (sync or async) is resolved at
+     * SUBMIT time, so the executor can derive params from a live pre-trade quote
+     * (the closed loop: fee tier + amountOutMinimum from the actual pool, not hardcoded).
+     */
+    params: Record<string, unknown> | (() => Record<string, unknown> | Promise<Record<string, unknown>>);
     slippageBps?: number;
     gasPriceWei?: bigint;
     /** Native value (wei) to attach. */
@@ -101,11 +105,14 @@ export function makeExecutorRunner(opts: ExecutorRunnerOptions): SubAgentRunner 
     // the type narrows and a malformed dispatch fails cleanly rather than throwing.
     if (!outcome.mandateId) return { role: outcome.role, ran: false, detail: "no mandate id" };
 
+    // Resolve params at submit time so a live pre-trade quote can set fee + minOut.
+    const params = typeof opts.swap.params === "function" ? await opts.swap.params() : opts.swap.params;
+
     const req: ExecutionRequest = {
       target: opts.swap.target,
       selector,
       notionalUsdc: opts.swap.notionalUsdc,
-      call: { contractMethodId: opts.contractMethodId, params: opts.swap.params },
+      call: { contractMethodId: opts.contractMethodId, params },
     };
     if (opts.swap.valueWei !== undefined) req.call.valueWei = opts.swap.valueWei;
     if (opts.delegationData && opts.delegationData.length > 0) req.call.delegationData = opts.delegationData;

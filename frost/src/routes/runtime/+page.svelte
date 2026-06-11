@@ -14,7 +14,11 @@
   import { profile } from "$lib/stores/profile.svelte";
   import { revocableIssuer, liveRevoke } from "$lib/agent/revocation";
   import { createLiveRootMandate, liveSdkIssuer } from "$lib/agent/live";
-  import { liveCommitAudit } from "$lib/agent/audit-commit";
+  import { crossCheckedSepoliaQuote, BASE_SEPOLIA_RPCS } from "$lib/agent/rpc-crosscheck";
+  import type { Caveat } from "@frost/sdk";
+  import { privateKeyToAccount } from "viem/accounts";
+  import { X402_INFERENCE_URL } from "$lib/flags";
+  import { liveCommitAudit, liveCommitAuditWithSig, requestAuditCommitSignature } from "$lib/agent/audit-commit";
   import { buildTransport } from "$lib/agent/transport";
   import { TauriKeyStore } from "$lib/key-store";
   import { customAgents, toDefinition } from "$lib/stores/custom-agents.svelte";
@@ -120,6 +124,9 @@
         walletAddress: (c.walletAddress ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
         swapMethodId: c.swapMethodId ?? "",
       };
+      // Rebuild the transport next time so the x402 paid leg picks up the session key.
+      transportRef = undefined;
+      switcher = undefined;
     } catch (e) {
       demoError = e instanceof Error ? e.message : String(e);
       demo = null;
@@ -186,6 +193,40 @@
     // server wallet. Runs the same §10.3 preflight (against the signed CALLABLE_SURFACE)
     // + HITL gate; only the submit is real. Highest-priority when demo creds are loaded.
     if (demoSwapReady && demo) {
+      const d = demo;
+      // CLOSED LOOP: resolve fee tier + amountOutMinimum from a LIVE Base Sepolia quote
+      // of this exact swap (not hardcoded "3000"/"0"). Quotes the pool we actually trade,
+      // applies the signed slippage as the on-chain floor, and falls back to the proven
+      // params if the quote is unavailable — so the live swap is never broken.
+      const resolveSwapParams = async () => {
+        const baseParams = {
+          tokenIn: WETH,
+          tokenOut: GRANT_TOKEN,
+          recipient: d.walletAddress,
+          amountIn: SWAP_AMOUNT_IN_WEI,
+          sqrtPriceLimitX96: "0",
+        };
+        try {
+          // T-34c: cross-check the floor-setting quote across SEVERAL independent Base
+          // Sepolia RPCs — only trust a floor a quorum corroborates (no single-RPC trust).
+          const route = await crossCheckedSepoliaQuote({
+            rpcUrls: BASE_SEPOLIA_RPCS,
+            tokenIn: WETH,
+            tokenOut: GRANT_TOKEN,
+            amountInWei: BigInt(SWAP_AMOUNT_IN_WEI),
+            slippageBps: spec.slippageBps,
+          });
+          if (route.corroborated) {
+            store.note(`Pre-trade quote cross-checked ${route.agree}/${route.total} RPCs (fee ${route.fee}, spread ${route.spreadBps}bps): minOut ${route.amountOutMinimum}`);
+            return { params: { ...baseParams, fee: String(route.fee), amountOutMinimum: route.amountOutMinimum.toString() } };
+          }
+          store.note(`Pre-trade quote NOT corroborated (${route.responded}/${route.total} RPCs, spread ${route.spreadBps}bps) — using safe fallback floor.`);
+        } catch {
+          /* fall through to proven params */
+        }
+        // Proven fallback (the live-tested swap params): fee 3000, accept-any floor.
+        return { params: { ...baseParams, fee: "3000", amountOutMinimum: "0" } };
+      };
       return makeExecutorRunner({
         oneShot: { apiKey: demo.apiKey, apiSecret: demo.apiSecret, walletId: demo.walletId },
         contractMethodId: demo.swapMethodId,
@@ -193,17 +234,7 @@
           target: BASE_SEPOLIA_SWAP_ROUTER_02,
           signature: "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
           notionalUsdc: execNotional(),
-          params: {
-            params: {
-              tokenIn: WETH,
-              tokenOut: GRANT_TOKEN,
-              fee: "3000",
-              recipient: demo.walletAddress,
-              amountIn: SWAP_AMOUNT_IN_WEI,
-              amountOutMinimum: "0",
-              sqrtPriceLimitX96: "0",
-            },
-          },
+          params: resolveSwapParams,
           slippageBps: spec.slippageBps,
         },
         context,
@@ -264,6 +295,8 @@
   let commitTx = $state<string | undefined>(undefined);
   let commitSimulated = $state(false);
   let commitError = $state<string | undefined>(undefined);
+  /** The committer recorded on-chain — the session key (single-sign) or the co-signer (T-17). */
+  let commitCommitter = $state<string | undefined>(undefined);
 
   async function commitAudit() {
     if (!receipt || committing) return;
@@ -280,11 +313,47 @@
           sessionEnd: BigInt(Math.floor(Date.now() / 1000)),
         });
         commitSimulated = false;
+        commitCommitter = demo.walletAddress; // session key is the committer here
       } else {
         // No key — simulated anchor (just surfaces the root).
         commitTx = receipt.merkleRoot;
         commitSimulated = true;
       }
+    } catch (e) {
+      commitError = e instanceof Error ? e.message : String(e);
+    } finally {
+      committing = false;
+    }
+  }
+
+  /**
+   * CO-SIGNED anchor (T-17 / IG-08): the user co-signs the Merkle root in MetaMask
+   * (via the wallet bridge), then the funded session key RELAYS it through
+   * `commitWithSig` — so the on-chain committer is the user, not the agent. Needs demo
+   * creds (to relay gas) + the wallet bridge. Falls back to nothing on error/cancel.
+   */
+  async function commitAuditCoSigned() {
+    if (!receipt || committing) return;
+    if (!demo) { commitError = "Co-signed commit needs demo creds (the session key relays gas)."; return; }
+    committing = true;
+    commitError = undefined;
+    try {
+      const sessionEnd = Math.floor(Date.now() / 1000);
+      const { signature, signer } = await requestAuditCommitSignature({
+        sessionId: receipt.sessionId as `0x${string}`,
+        auditRoot: receipt.merkleRoot as `0x${string}`,
+        sessionEnd,
+      });
+      commitTx = await liveCommitAuditWithSig({
+        sessionPrivateKey: demo.sessionKey,
+        rpcUrl: demo.rpcUrl,
+        sessionId: receipt.sessionId as `0x${string}`,
+        merkleRoot: receipt.merkleRoot as `0x${string}`,
+        sessionEnd: BigInt(sessionEnd),
+        signature,
+      });
+      commitSimulated = false;
+      commitCommitter = signer; // the recovered EIP-712 signer == on-chain committer
     } catch (e) {
       commitError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -304,12 +373,26 @@
   }
 
   /**
-   * Build the shared thinking transport ONCE (Venice x402 primary → OpenRouter/Groq
-   * fallback) from config, so the Venice budget spans compile + planning.
+   * Build the shared thinking transport ONCE so the budget spans compile + planning.
+   * When demo creds are loaded AND a gateway URL is set (PUBLIC_X402_INFERENCE_URL), the
+   * PRIMARY (paid) leg becomes the self-hosted x402 gateway: the session key signs an
+   * EIP-3009 USDC payment per call (settled on Base via the 1Shot facilitator), then the
+   * gateway proxies to OpenRouter/Grok. The switcher falls back to the config provider on
+   * any payment/transport error, so this is safe to leave on for the demo.
    */
   function ensureTransport(): InferenceTransport {
     if (transportRef) return transportRef;
-    const built = buildTransport({ primaryEnabled, onRoute: (i) => store.onRoute(i) });
+    const opts: NonNullable<Parameters<typeof buildTransport>[0]> = { primaryEnabled, onRoute: (i) => store.onRoute(i) };
+    if (demo && X402_INFERENCE_URL) {
+      opts.x402 = {
+        baseUrl: X402_INFERENCE_URL,
+        account: privateKeyToAccount(demo.sessionKey),
+        network: "eip155:84532",
+        ...(demo.rpcUrl ? { rpcUrl: demo.rpcUrl } : {}),
+      };
+      opts.onSettle = (info) => { if (info.paymentResponse) store.note("x402 inference payment settled on Base"); };
+    }
+    const built = buildTransport(opts);
     transportRef = built.transport;
     switcher = built.switcher;
     return transportRef;
@@ -389,10 +472,14 @@
       // the funded session key, then real sub-mandates under it); else simulated.
       let inner: SubMandateIssuer;
       let rootMandateId: `0x${string}`;
+      // The COMMS_TEMPLATE caveat as issued on-chain — bound by the comms sub-agent's
+      // send-time hash check (IG-06). Only the live root produces a real commitment.
+      let committedCommsCaveat: Caveat | undefined;
       if (demo) {
         const root = await createLiveRootMandate({ sessionPrivateKey: demo.sessionKey, rpcUrl: demo.rpcUrl, spec });
         rootMandateId = root.rootMandateId;
         liveRootMandateId = root.rootMandateId;
+        committedCommsCaveat = root.commsTemplateCaveat;
         inner = liveSdkIssuer({ sessionPrivateKey: demo.sessionKey, rpcUrl: demo.rpcUrl });
       } else {
         inner = simulatedIssuer();
@@ -412,6 +499,7 @@
         veniceApiKey: config.value.veniceApiKey,
         inferenceTransport: transport,
         discordWebhookUrl: config.value.discordWebhookUrl || undefined,
+        ...(committedCommsCaveat ? { commsTemplateCaveat: committedCommsCaveat } : {}),
         ...(registry ? { registry } : {}),
         ...(enableExecutor ? { executorRunner: buildExecutorRunner(spec) } : {}),
         issue,
@@ -716,7 +804,20 @@
                     {#if committing}<Loader2 class="mr-1 size-3 animate-spin" />{/if}
                     {commitTx ? "Committed" : "Commit on-chain"}
                   </Button>
+                  {#if demo}
+                    <Button variant="secondary" size="sm" onclick={commitAuditCoSigned} disabled={committing || !!commitTx}>
+                      {#if committing}<Loader2 class="mr-1 size-3 animate-spin" />{/if}
+                      Commit with co-signature
+                    </Button>
+                  {/if}
                 </div>
+                {#if demo && !commitTx}
+                  <p class="text-[10px] text-muted-foreground">
+                    "Commit with co-signature" (T-17): you co-sign the root in MetaMask, the session
+                    key relays gas — so the on-chain committer is you, not the agent. Plain commit
+                    single-signs with the session key.
+                  </p>
+                {/if}
                 {#if commitTx}
                   <div class="rounded-lg border bg-card p-2 text-xs">
                     {#if commitSimulated}
@@ -725,6 +826,9 @@
                     {:else}
                       <span class="text-muted-foreground">Anchored on-chain (AuditRegistry):</span>
                       <a class="font-mono break-all text-primary underline" href={`https://sepolia.basescan.org/tx/${commitTx}`} target="_blank" rel="noopener noreferrer">{commitTx}</a>
+                      {#if commitCommitter}
+                        <div class="mt-1 text-[10px] text-muted-foreground">committer: <span class="font-mono">{shortHash(commitCommitter)}</span></div>
+                      {/if}
                     {/if}
                   </div>
                 {/if}

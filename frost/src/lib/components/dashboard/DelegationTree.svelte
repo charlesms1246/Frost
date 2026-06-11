@@ -54,6 +54,14 @@
     {/if}
   </div>
 
+  {#if store.bestRoute}
+    <div class="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300">
+      <span class="font-medium">Best route:</span>
+      {store.bestRoute.label} — {usdc(store.bestRoute.amountOutUsdc)}
+      <span class="text-[10px] opacity-70">(best of {store.bestRoute.outOf} quote{store.bestRoute.outOf === 1 ? "" : "s"})</span>
+    </div>
+  {/if}
+
   {#if store.children.length > 0}
     <div class="relative ml-3 flex flex-col gap-2 border-l pl-5">
       {#each store.children as node (node.index)}

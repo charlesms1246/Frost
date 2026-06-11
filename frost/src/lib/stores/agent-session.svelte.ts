@@ -18,6 +18,16 @@ export interface AgentNode {
   mandateId?: string;
   txHash?: string;
   detail?: string;
+  /** Structured quote for pricer nodes (cross-source ranking). */
+  quote?: { label: string; amountOutUsdc: bigint };
+}
+
+export interface BestRoute {
+  role: string;
+  label: string;
+  amountOutUsdc: bigint;
+  /** Number of pricer quotes it beat (for "best of N" copy). */
+  outOf: number;
 }
 
 export type Phase = "idle" | "planning" | "issuing" | "dispatching" | "done" | "escalated" | "error";
@@ -47,9 +57,21 @@ export class AgentSessionStore {
   authority = $state<{ subMandateCount: number; aggregateSubMandateBudget: bigint; bucketAvailable: number } | undefined>(undefined);
   errorText = $state<string | undefined>(undefined);
 
-  // --- HITL gate ---
-  hitl = $state<{ pending: boolean; request?: HitlApprovalRequest }>({ pending: false });
+  // --- HITL gate (IG-07: rate-limited + prompt-bound) ---
+  /**
+   * Per-SESSION cap on HITL prompts (T-28b): an attacker who can trigger actions
+   * cannot spam approval dialogs to induce fatigue/habituation. Past the cap, every
+   * further prompt is auto-rejected (default-deny) without surfacing a dialog.
+   */
+  static readonly HITL_PROMPT_LIMIT = 5;
+  hitl = $state<{ pending: boolean; request?: HitlApprovalRequest; approvalId?: number }>({ pending: false });
+  /** HITL prompts raised this session (counts toward HITL_PROMPT_LIMIT). */
+  hitlPromptCount = $state(0);
   private hitlResolve: ((approved: boolean) => void) | undefined;
+  /** Monotonic id source; each prompt gets a unique id its approval must match (H-12). */
+  private nextApprovalId = 1;
+  /** The id of the currently-pending prompt — an approval for any other id is stale. */
+  private pendingApprovalId: number | undefined;
   /** Every HITL decision this session — fed into the audit receipt. */
   hitlApprovals = $state<{ notionalUsdc: bigint; reason: string; approved: boolean }[]>([]);
 
@@ -74,6 +96,19 @@ export class AgentSessionStore {
     return this.routes.venice + this.routes.openrouter;
   }
 
+  /**
+   * The winning route across all pricer sub-agents that reported a quote — the
+   * demo's "spawn N pricers, pick the best rate" payoff. Highest USDC out wins
+   * (a SELL of WETH → USDC). Undefined until at least one pricer has a quote.
+   */
+  get bestRoute(): BestRoute | undefined {
+    const quoted = this.children.filter((c) => c.quote);
+    if (quoted.length === 0) return undefined;
+    let best = quoted[0]!;
+    for (const c of quoted) if (c.quote!.amountOutUsdc > best.quote!.amountOutUsdc) best = c;
+    return { role: best.role, label: best.quote!.label, amountOutUsdc: best.quote!.amountOutUsdc, outOf: quoted.length };
+  }
+
   reset(description: string, rootMandateId?: string): void {
     // Release any in-flight approval so its awaiter doesn't hang across a reset.
     if (this.hitlResolve) {
@@ -90,6 +125,8 @@ export class AgentSessionStore {
     this.errorText = undefined;
     this.hitl = { pending: false };
     this.hitlApprovals = [];
+    this.hitlPromptCount = 0;
+    this.pendingApprovalId = undefined;
     this.spawningRevoked = false;
     this.revokeTxHash = undefined;
   }
@@ -105,6 +142,9 @@ export class AgentSessionStore {
       this.hitlResolve(false);
       this.hitlResolve = undefined;
     }
+    // The pending prompt (if any) is cleared, but hitlPromptCount PERSISTS across cycles
+    // within a session — the T-28b fatigue cap is a session-level budget, not per-cycle.
+    this.pendingApprovalId = undefined;
     this.phase = "idle";
     if (description !== undefined) this.master.description = description;
     this.master.status = "planned";
@@ -127,20 +167,39 @@ export class AgentSessionStore {
    * the executor runner as its `requestApproval`.
    */
   awaitApproval(request: HitlApprovalRequest): Promise<boolean> {
-    this.hitl = { pending: true, request };
-    this.log("warn", `HITL: approval required — ${usdc(request.notionalUsdc)} (${request.reason})`);
+    // T-28b: cap prompts per session — beyond the limit, default-deny without prompting
+    // so approval dialogs can't be spammed to fatigue the user into a careless "yes".
+    if (this.hitlPromptCount >= AgentSessionStore.HITL_PROMPT_LIMIT) {
+      this.log("warn", `HITL: prompt limit (${AgentSessionStore.HITL_PROMPT_LIMIT}/session) reached — auto-rejecting ${usdc(request.notionalUsdc)} (${request.reason}).`);
+      return Promise.resolve(false);
+    }
+    this.hitlPromptCount += 1;
+    const approvalId = this.nextApprovalId++;
+    this.pendingApprovalId = approvalId;
+    this.hitl = { pending: true, request, approvalId };
+    this.log("warn", `HITL: approval required — ${usdc(request.notionalUsdc)} (${request.reason}) [#${approvalId}]`);
     return new Promise<boolean>((resolve) => {
       this.hitlResolve = resolve;
     });
   }
 
-  /** Resolve the pending approval — called by the HITL banner's Approve/Reject. */
-  resolveHitl(approved: boolean): void {
+  /**
+   * Resolve the pending approval — called by the HITL banner's Approve/Reject. H-12:
+   * the decision is BOUND to the prompt that fired (`approvalId`). A resolve whose id
+   * doesn't match the pending prompt is a stale/replayed click and is ignored, so a
+   * "yes" for one action can never be applied to a different pending action.
+   */
+  resolveHitl(approved: boolean, approvalId?: number): void {
     if (!this.hitlResolve) return;
+    if (approvalId !== undefined && approvalId !== this.pendingApprovalId) {
+      this.log("warn", `HITL: ignored a stale approval (#${approvalId} ≠ pending #${this.pendingApprovalId ?? "none"}).`);
+      return;
+    }
     const req = this.hitl.request;
     if (req) this.hitlApprovals.push({ notionalUsdc: req.notionalUsdc, reason: req.reason, approved });
     this.hitlResolve(approved);
     this.hitlResolve = undefined;
+    this.pendingApprovalId = undefined;
     this.log(approved ? "run" : "warn", `HITL: ${approved ? "approved → resuming" : "rejected"}`);
     this.hitl = { pending: false };
   }
@@ -169,6 +228,11 @@ export class AgentSessionStore {
       revoked: this.spawningRevoked,
       ...(this.revokeTxHash ? { revokeTxHash: this.revokeTxHash } : {}),
     };
+  }
+
+  /** Append an informational activity line (e.g. live pre-trade quote telemetry). */
+  note(text: string): void {
+    this.log("run", text);
   }
 
   private log(kind: ActivityLine["kind"], text: string): void {
@@ -244,6 +308,7 @@ export class AgentSessionStore {
           n.status = e.ran ? "done" : "failed";
           if (e.behavior) n.behavior = e.behavior;
           if (e.detail) n.detail = e.detail;
+          if (e.quote) n.quote = { label: e.quote.label, amountOutUsdc: BigInt(e.quote.amountOutUsdc) };
         }
         this.log(e.ran ? "run" : "warn", `${e.role} ${e.ran ? "✓" : "✗"} ${e.detail ?? ""}`.trim());
         break;

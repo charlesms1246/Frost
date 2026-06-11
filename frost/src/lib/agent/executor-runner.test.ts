@@ -78,6 +78,35 @@ describe("makeExecutorRunner", () => {
     expect(res.ran).toBe(false);
     expect(res.detail).toMatch(/exceeds HITL threshold/);
   });
+
+  it("resolves an async params function at submit time (closed-loop pre-trade quote)", async () => {
+    const captured: { params?: Record<string, unknown> } = {};
+    const fetchImpl: OneShotFetch = async (url, init) => {
+      if (url.endsWith("/token")) return { ok: true, status: 200, statusText: "OK", async json() { return { access_token: "t", expires_in: 3600 }; } };
+      // Capture the params the 1Shot execute call was given.
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      captured.params = body.params;
+      return { ok: true, status: 200, statusText: "OK", async json() { return { id: "tx-1", status: "Submitted", transactionHash: null }; } };
+    };
+    let resolved = 0;
+    const r = makeExecutorRunner({
+      oneShot: { apiKey: "k", apiSecret: "s", walletId: "w-1", fetchImpl },
+      contractMethodId: "m-swap",
+      swap: {
+        target: BASE_SEPOLIA_SWAP_ROUTER_02,
+        signature: EXACT_INPUT_SINGLE,
+        notionalUsdc: 1_000_000n,
+        params: async () => { resolved += 1; return { params: { fee: "500", amountOutMinimum: "1592000" } }; },
+        slippageBps: 50,
+      },
+      context,
+      spec,
+    });
+    const res = await r({ behavior: "executor", outcome });
+    expect(resolved).toBe(1);
+    expect(res.ran).toBe(true);
+    expect(captured.params).toMatchObject({ params: { fee: "500", amountOutMinimum: "1592000" } });
+  });
 });
 
 describe("makeSimulatedExecutorRunner (HITL demo)", () => {
