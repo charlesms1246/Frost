@@ -30,6 +30,18 @@ import { resolveBehavior } from "./dispatch.js";
  * cycle is unit-testable offline.
  */
 
+/**
+ * A comparable quote a pricer sub-agent reports, so the UI can rank routes across
+ * the parallel pricers (the demo's "spawn N pricers, pick the best route" beat).
+ * Optional and additive — non-pricer runners omit it.
+ */
+export interface QuoteMetric {
+  /** Human label for the source/route, e.g. "Uniswap v3 (0.30%)" or "Paraswap". */
+  label: string;
+  /** Output amount in USDC base units (6-dec), as a string to survive JSON. */
+  amountOutUsdc: string;
+}
+
 /** How a dispatched sub-agent ran. The runner owns the actual work (monitor/executor/…). */
 export interface RunOutcome {
   role: string;
@@ -39,6 +51,8 @@ export interface RunOutcome {
   ran: boolean;
   /** Free-form detail (e.g. "fired", "submitted", "posted", or why it was skipped). */
   detail?: string;
+  /** Structured quote (pricer behavior only) for cross-source ranking. */
+  quote?: QuoteMetric;
 }
 
 /** Context handed to a behavior runner for one issued sub-agent. */
@@ -84,7 +98,7 @@ export type SessionEvent =
       bucketAvailable: number;
     }
   | { type: "sub-agent-dispatched"; role: string; behavior: AgentBehavior; mandateId: Hex }
-  | { type: "sub-agent-result"; role: string; behavior?: AgentBehavior; mandateId: Hex; ran: boolean; detail?: string }
+  | { type: "sub-agent-result"; role: string; behavior?: AgentBehavior; mandateId: Hex; ran: boolean; detail?: string; quote?: QuoteMetric }
   | { type: "cycle-complete"; spawnedSubMandateIds: Hex[]; escalateToHITL: boolean };
 
 /** Sink for {@link SessionEvent}s. Injected; must not throw (the session ignores throws). */
@@ -250,8 +264,8 @@ export class Session {
       this.emit({ type: "sub-agent-dispatched", role: outcome.role, behavior, mandateId: outcome.mandateId });
       try {
         const r = await runner({ behavior, outcome });
-        runs.push({ role: r.role, behavior, mandateId: outcome.mandateId, ran: r.ran, ...(r.detail !== undefined ? { detail: r.detail } : {}) });
-        this.emit({ type: "sub-agent-result", role: r.role, behavior, mandateId: outcome.mandateId, ran: r.ran, ...(r.detail !== undefined ? { detail: r.detail } : {}) });
+        runs.push({ role: r.role, behavior, mandateId: outcome.mandateId, ran: r.ran, ...(r.detail !== undefined ? { detail: r.detail } : {}), ...(r.quote !== undefined ? { quote: r.quote } : {}) });
+        this.emit({ type: "sub-agent-result", role: r.role, behavior, mandateId: outcome.mandateId, ran: r.ran, ...(r.detail !== undefined ? { detail: r.detail } : {}), ...(r.quote !== undefined ? { quote: r.quote } : {}) });
       } catch (e) {
         const detail = `runner threw: ${e instanceof Error ? e.message : String(e)}`;
         runs.push({ role: outcome.role, behavior, mandateId: outcome.mandateId, ran: false, detail });

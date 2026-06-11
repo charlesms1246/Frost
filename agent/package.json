@@ -29,6 +29,8 @@
   "dependencies": {
     "@1shotapi/client-sdk": "^1.1.9",
     "@frost/sdk": "file:../sdk",
+    "@x402/core": "^2.14.0",
+    "@x402/evm": "^2.14.0",
     "viem": "^2.51.3"
   },
   "devDependencies": {
