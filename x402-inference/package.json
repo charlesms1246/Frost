@@ -1,0 +1,26 @@
+{
+  "name": "@frost/x402-inference",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-deployed x402 inference gateway — emulates Venice's native-x402 /chat/completions by gating each call behind a real USDC-on-Base x402 settlement (1Shot facilitator) and proxying the completion to OpenRouter (default) / Grok (fallback).",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@1shotapi/x402-facilitator": "^2.0.0",
+    "@x402/core": "^2.14.0",
+    "@x402/evm": "^2.14.0",
+    "@x402/express": "^2.14.0",
+    "express": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
