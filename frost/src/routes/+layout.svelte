@@ -3,9 +3,24 @@
 	import { page } from '$app/stores';
 	import TitleBar from '$lib/chrome/TitleBar.svelte';
 	import NavRail from '$lib/chrome/NavRail.svelte';
+	import WalletDelegateGate from '$lib/chrome/WalletDelegateGate.svelte';
 	import '$lib/stores/theme.svelte';
+	import { profile } from '$lib/stores/profile.svelte';
+	import { chats } from '$lib/stores/chats.svelte';
+	import { customAgents } from '$lib/stores/custom-agents.svelte';
+	import { cloudSession } from '$lib/cloud';
 
 	const { children } = $props();
+
+	// Debounced cloud sync: when signed in, any change to the synced stores schedules a
+	// push. Reading the getters establishes the reactive dependency; the push itself is
+	// debounced + best-effort inside the session store.
+	$effect(() => {
+		void profile.value;
+		void chats.list;
+		void customAgents.list;
+		if (cloudSession.signedIn) cloudSession.schedulePush();
+	});
 
 	// `/` is the splash window / entry gate — no titlebar or rail.
 	const noChrome = $derived($page.url.pathname === '/');
@@ -23,6 +38,7 @@
 {/if}
 {#if showRail}
 	<NavRail />
+	<WalletDelegateGate />
 {/if}
 
 <div class="app-shell" class:with-rail={showRail} class:no-chrome={noChrome}>

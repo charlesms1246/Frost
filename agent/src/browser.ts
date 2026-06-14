@@ -14,6 +14,8 @@ export * from "./types.js";
 export * from "./inference/openrouter.js";
 export * from "./inference/venice-inference.js";
 export * from "./inference/switching.js";
+export * from "./inference/x402-inference.js";
+export * from "./inference/x402-signer.js";
 export {
   buildReceipt,
   hashLeaf,
@@ -87,6 +89,13 @@ export {
   type UniswapV3SourceOptions,
 } from "./pricer/sources/uniswap-v3.js";
 export {
+  paraswapQuote,
+  PARASWAP_SOURCE,
+  type AggregatorQuoteRequest,
+  type AggregatorFetch,
+  type ParaswapQuoteOptions,
+} from "./pricer/sources/paraswap.js";
+export {
   Monitor,
   type MonitorCondition,
   type MonitorResult,
@@ -123,6 +132,7 @@ export {
   type SpawnCycleResult,
   type RunOutcome,
   type RunContext,
+  type QuoteMetric,
   type SubAgentRunner,
   type SessionEvent,
   type SessionObserver,

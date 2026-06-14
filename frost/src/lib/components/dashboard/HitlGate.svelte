@@ -22,8 +22,8 @@
       </p>
     </div>
     <div class="flex shrink-0 gap-2">
-      <Button size="sm" variant="outline" onclick={() => store.resolveHitl(false)}>Reject</Button>
-      <Button size="sm" onclick={() => store.resolveHitl(true)}>Approve</Button>
+      <Button size="sm" variant="outline" onclick={() => store.resolveHitl(false, store.hitl.approvalId)}>Reject</Button>
+      <Button size="sm" onclick={() => store.resolveHitl(true, store.hitl.approvalId)}>Approve</Button>
     </div>
   </div>
 {/if}

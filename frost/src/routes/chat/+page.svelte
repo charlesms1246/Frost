@@ -13,7 +13,8 @@
   import { runMasterTool, readToolNames, toolCatalog, type ToolContext } from "$lib/agent/master-tools";
   import { Compiler, renderSpec } from "@frost/agent/browser";
   import type { CompiledSpec, CompileResult } from "@frost/agent/browser";
-  import { VENICE_DISABLED, FALLBACK_BASE_RPC_URL } from "$lib/flags";
+  import { FALLBACK_BASE_RPC_URL } from "$lib/flags";
+  import { veniceKill } from "$lib/stores/venice.svelte";
   import SendHorizontal from "@lucide/svelte/icons/send-horizontal";
   import PanelRight from "@lucide/svelte/icons/panel-right";
   import SquarePen from "@lucide/svelte/icons/square-pen";
@@ -84,13 +85,13 @@
       const compiler = new Compiler({ transport, model });
       const history = (chats.current?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
       const system =
-        MASTER_AGENT_PROMPT + "\n\nTOOLS:\n" + toolCatalog() + "\n\n" + masterRuntimeContext(config.value, VENICE_DISABLED);
+        MASTER_AGENT_PROMPT + "\n\nTOOLS:\n" + toolCatalog() + "\n\n" + masterRuntimeContext(config.value, veniceKill.disabled);
       const ctx: ToolContext = {
         veniceApiKey: config.value.veniceApiKey,
         veniceNetwork: "base-mainnet",
         basescanApiKey: config.value.basescanApiKey,
         discordWebhookUrl: config.value.discordWebhookUrl,
-        veniceDisabled: VENICE_DISABLED,
+        veniceDisabled: veniceKill.disabled,
         fallbackRpcUrl: FALLBACK_BASE_RPC_URL,
         chainId: 8453,
       };

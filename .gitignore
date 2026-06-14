@@ -5,6 +5,10 @@
 /.pnp
 .pnp.js
 package-lock.json
+# CI builds the Tauri app from these packages and needs reproducible installs (npm ci):
+!sdk/package-lock.json
+!agent/package-lock.json
+!frost/package-lock.json
 yarn.lock
 
 # testing

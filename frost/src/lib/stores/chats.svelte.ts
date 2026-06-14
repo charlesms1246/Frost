@@ -92,6 +92,12 @@ function createChats() {
 			currentId = undefined;
 			persist();
 		},
+		/** Replace all conversations (used by cloud-sync restore on sign-in). */
+		hydrate(next: Conversation[]) {
+			conversations = Array.isArray(next) ? next : [];
+			currentId = conversations[0]?.id;
+			persist();
+		},
 	};
 }
 

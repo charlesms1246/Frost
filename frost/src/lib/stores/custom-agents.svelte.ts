@@ -82,6 +82,11 @@ function createCustomAgents() {
 			agents = [];
 			persist();
 		},
+		/** Replace all saved agents (used by cloud-sync restore on sign-in). */
+		hydrate(next: StoredAgent[]) {
+			agents = Array.isArray(next) ? next : [];
+			persist();
+		},
 	};
 }
 

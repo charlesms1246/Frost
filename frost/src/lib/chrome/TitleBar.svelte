@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ThemeToggle from './ThemeToggle.svelte';
+	import VeniceToggle from './VeniceToggle.svelte';
 	import WindowControls from './WindowControls.svelte';
 	import { isMacOS } from './platform';
 </script>
@@ -15,6 +16,7 @@
 	</div>
 
 	<div class="right">
+		<VeniceToggle />
 		<ThemeToggle />
 		<WindowControls />
 	</div>

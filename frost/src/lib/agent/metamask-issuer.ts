@@ -9,7 +9,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
  *      (`build_erc20_token_stream_permission`) — the single source of the Flask
  *      13.32 schema (`wallet-bridge-spec.md` §4).
  *   2. Drive the Tauri bridge (`wallet_bridge_perform`, op `grant_permissions`): it
- *      opens the user's browser to `port42.vercel.app/connect/grant-permissions`,
+ *      opens the user's browser to `xfrost.vercel.app/connect/grant-permissions`,
  *      the user reviews + approves in MetaMask Flask, and the signed grant POSTs
  *      back to the local callback server.
  *   3. Return the ERC-7715 `granted` delegation.
@@ -27,7 +27,10 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
  * without a live Tauri shell.
  */
 
-export type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+export type InvokeFn = <T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
 
 export interface MetaMaskGrantOptions {
   /** The delegate the permission is granted TO — the master-agent session account. */
@@ -77,9 +80,12 @@ export async function requestMetaMaskGrant(
     expiry_secs: opts.expirySecs,
     justification: opts.justification,
   };
-  if (opts.initialAmountHex) specArgs["initial_amount_hex"] = opts.initialAmountHex;
+  if (opts.initialAmountHex)
+    specArgs["initial_amount_hex"] = opts.initialAmountHex;
   if (opts.chainIdHex) specArgs["chain_id_hex"] = opts.chainIdHex;
-  const spec = await invoke<unknown>("build_erc20_token_stream_permission", { args: specArgs });
+  const spec = await invoke<unknown>("build_erc20_token_stream_permission", {
+    args: specArgs,
+  });
 
   // 2 — drive the bridge: browser → MetaMask → callback. The user approves manually.
   const result = await invoke<WalletOperationResult>("wallet_bridge_perform", {

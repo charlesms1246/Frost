@@ -4,7 +4,7 @@
 //! viable callback server used by spike 7 (round-trip), spike 8 (ERC-7715),
 //! and spike 10 (CORS). It opens a one-shot HTTP server on a random
 //! 127.0.0.1 port, opens the user's system browser to a hosted page
-//! (`port42.vercel.app/connect/<op>/` in prod, `localhost:3000/connect/<op>/`
+//! (`xfrost.vercel.app/connect/<op>/` in prod, `localhost:3000/connect/<op>/`
 //! in dev), waits for a single POST callback containing the operation result,
 //! validates the one-time challenge, and returns the body to the caller.
 //!
@@ -45,6 +45,7 @@ pub enum WalletOperation {
     GrantPermissions, // spike 8 — ERC-7715 requestExecutionPermissions
     Revoke,
     Commit,
+    SignMessage, // SIWE cloud sign-in — personal_sign (NOT the ERC-7715 snap)
 }
 
 impl WalletOperation {
@@ -55,6 +56,7 @@ impl WalletOperation {
             WalletOperation::GrantPermissions => "grant-permissions",
             WalletOperation::Revoke => "revoke",
             WalletOperation::Commit => "commit",
+            WalletOperation::SignMessage => "sign",
         }
     }
 }
@@ -85,8 +87,8 @@ pub enum WalletBridgeError {
 /// Allowed origins for cross-origin browser-to-localhost POSTs.
 /// Production: only the hosted bridge. Dev: also `localhost:3000` when
 /// the bridge is running locally.
-const ALLOWED_ORIGINS_PROD: &[&str] = &["https://port42.vercel.app"];
-const ALLOWED_ORIGINS_DEV: &[&str] = &["https://port42.vercel.app", "http://localhost:3000"];
+const ALLOWED_ORIGINS_PROD: &[&str] = &["https://xfrost.vercel.app"];
+const ALLOWED_ORIGINS_DEV: &[&str] = &["https://xfrost.vercel.app", "http://localhost:3000"];
 
 fn allowed_origins() -> &'static [&'static str] {
     if cfg!(debug_assertions) {
@@ -102,7 +104,7 @@ fn bridge_base() -> String {
         if cfg!(debug_assertions) {
             "http://localhost:3000".to_string()
         } else {
-            "https://port42.vercel.app".to_string()
+            "https://xfrost.vercel.app".to_string()
         }
     })
 }

@@ -7,6 +7,7 @@ import {
   VeniceRpcClient,
   Pricer,
   uniswapV3Source,
+  paraswapQuote,
   Monitor,
   priceThresholdCondition,
   CommsAgent,
@@ -30,6 +31,7 @@ import {
   type SessionObserver,
 } from "@frost/agent/browser";
 import type { Address, Hex } from "viem";
+import type { Caveat } from "@frost/sdk";
 import { makeExecutorRunner, type ExecutorRunnerOptions } from "./executor-runner";
 
 /**
@@ -104,6 +106,14 @@ export interface EmbeddedSessionOptions {
   discordWebhookUrl?: string;
   /** Values for the comms template's variables at send time. */
   commsValues?: Record<string, string>;
+  /**
+   * The COMMS_TEMPLATE caveat ACTUALLY ISSUED in the root mandate (from
+   * `createLiveRootMandate`). The comms sub-agent binds its send-time hash check
+   * against this exact committed caveat (IG-06/I-16/H-14), so a render template that
+   * doesn't match what was signed is rejected. Omitted (simulated/test) ⇒ the runner
+   * reconstructs the caveat from the spec template (no on-chain commitment to bind to).
+   */
+  commsTemplateCaveat?: Caveat;
 
   /** Saved custom agents, for routing custom role labels. */
   registry?: CustomAgentRegistry;
@@ -194,17 +204,52 @@ export function createEmbeddedSession(opts: EmbeddedSessionOptions): EmbeddedSes
   // as "no runner for behavior" rather than acting. ---
   const runners: NonNullable<SessionConfig["runners"]> = {
     pricer: async ({ outcome }) => {
+      const role = outcome.role.toLowerCase();
+      const amountIn = 10n ** 18n; // 1 WETH
+      const fmt = (v: bigint) => `$${(Number(v) / 1e6).toFixed(2)}`;
+
+      // Aggregator pricers (planner labels "pricer-1inch"/"pricer-paraswap"/…) quote
+      // off-chain via Paraswap's keyless REST — a GENUINELY different source from the
+      // on-chain Uniswap QuoterV2, so "compare quotes across DEXes" is real (IG-01).
+      // Degrades gracefully: an API failure fails just this pricer, not the cycle.
+      if (/paraswap|1inch|0x|aggregat|matcha|cow|odos/.test(role)) {
+        try {
+          const amountOut = await paraswapQuote({
+            tokenIn: BASE_MAINNET.weth,
+            tokenOut: BASE_MAINNET.usdc,
+            amountIn,
+            srcDecimals: 18,
+            destDecimals: 6,
+            chainId: 8453,
+          });
+          return {
+            role: outcome.role,
+            ran: true,
+            detail: `Paraswap (aggregator) → ${fmt(amountOut)}`,
+            quote: { label: "Paraswap (aggregator)", amountOutUsdc: amountOut.toString() },
+          };
+        } catch (e) {
+          return { role: outcome.role, ran: false, detail: `Paraswap quote failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+      }
+
+      // Default / Uniswap pricers quote the on-chain QuoterV2 over the Venice batch
+      // (compares its own fee tiers, reports the best).
       const sources = [500, 3000].map((fee) => uniswapV3Source({ quoter: BASE_MAINNET.quoter, fee }));
       const res = await new Pricer(venice).quote(
-        { tokenIn: BASE_MAINNET.weth, tokenOut: BASE_MAINNET.usdc, amountIn: 10n ** 18n },
+        { tokenIn: BASE_MAINNET.weth, tokenOut: BASE_MAINNET.usdc, amountIn },
         sources,
       );
+      if (!res.best) {
+        return { role: outcome.role, ran: false, detail: `no quote (${res.failed.map((f) => f.error).join("; ")})` };
+      }
+      const feeBps = Number(res.best.source.replace("uniswap-v3-", ""));
+      const label = `Uniswap v3 (${(feeBps / 10000).toFixed(2)}%)`;
       return {
         role: outcome.role,
-        ran: res.best !== null,
-        detail: res.best
-          ? `best ${res.best.source} → ${res.best.amountOut}`
-          : `no quote (${res.failed.map((f) => f.error).join("; ")})`,
+        ran: true,
+        detail: `${label} → ${fmt(res.best.amountOut)}`,
+        quote: { label, amountOutUsdc: res.best.amountOut.toString() },
       };
     },
     monitor: async ({ outcome }) => {
@@ -225,9 +270,13 @@ export function createEmbeddedSession(opts: EmbeddedSessionOptions): EmbeddedSes
   if (opts.discordWebhookUrl && opts.spec.commsTemplate) {
     const template = opts.spec.commsTemplate;
     const poster = new DiscordWebhookPoster(opts.discordWebhookUrl, fetchImpl);
+    // Bind against the COMMS_TEMPLATE caveat ISSUED on-chain when supplied; else
+    // reconstruct from the spec (simulated/test, where nothing was committed). This
+    // makes the send-time hash check verify the render template against the SIGNED
+    // commitment rather than a copy of itself (IG-06/I-16/H-14).
+    const committed = opts.commsTemplateCaveat ?? encodeCommsTemplate(template);
     runners.comms = async ({ outcome }) => {
-      // Bind to the SAME committed template the mandate carries (H-14).
-      const mandate = { caveats: [encodeCommsTemplate(template)] };
+      const mandate = { caveats: [committed] };
       const res = await new CommsAgent({ poster }).post(mandate, {
         template,
         values: opts.commsValues ?? {},
