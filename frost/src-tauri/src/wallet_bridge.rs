@@ -102,7 +102,17 @@ fn allowed_origins() -> &'static [&'static str] {
 /// used in BOTH dev and release so the redirect opens the live `/connect/*` pages.
 /// Override with `FROST_BRIDGE_BASE=http://localhost:3000` to drive a local `web/` server.
 fn bridge_base() -> String {
-    std::env::var("FROST_BRIDGE_BASE").unwrap_or_else(|_| "https://xfrost.vercel.app".to_string())
+    std::env::var("FROST_BRIDGE_BASE").unwrap_or_else(|_| {
+        // Dev (`tauri dev`) → the LOCAL web server, which always has the latest connect pages
+        // (grant/sign fixes ship there before they're redeployed to Vercel). Release → the
+        // deployed bridge. `FROST_BRIDGE_BASE` overrides either. localhost:3000 is already in
+        // ALLOWED_ORIGINS_DEV so the callback POST is accepted.
+        if cfg!(debug_assertions) {
+            "http://localhost:3000".to_string()
+        } else {
+            "https://xfrost.vercel.app".to_string()
+        }
+    })
 }
 
 fn make_challenge() -> String {

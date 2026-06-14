@@ -11,6 +11,13 @@
   import { MASTER_AGENT_PROMPT, masterRuntimeContext } from "$lib/agent/master-prompt";
   import { runMasterTurn, type MasterStep } from "$lib/agent/master-loop";
   import { runMasterTool, readToolNames, toolCatalog, type ToolContext } from "$lib/agent/master-tools";
+  import {
+    connectMetaMaskAuthority,
+    resolveRelayerTarget,
+    GRANT_TOKEN,
+    GRANT_PERIOD_SECS,
+    GRANT_EXPIRY_SECS,
+  } from "$lib/wallet-connect";
   import { Compiler, renderSpec } from "@frost/agent/browser";
   import type { CompiledSpec, CompileResult } from "@frost/agent/browser";
   import { FALLBACK_BASE_RPC_URL } from "$lib/flags";
@@ -94,6 +101,34 @@
         veniceDisabled: veniceKill.disabled,
         fallbackRpcUrl: FALLBACK_BASE_RPC_URL,
         chainId: 8453,
+        // request_authority: drive a NEW scoped ERC-7715 USDC grant via MetaMask, store it as the
+        // active grant. Lets the agent ask the user for more/extra budget mid-conversation (e.g. to
+        // fund a swap beyond the onboarding grant) — the "agent proposes, user disposes" pattern.
+        requestAuthority: async ({ amountBaseUnits, periodSecs, justification }) => {
+          try {
+            const target = await resolveRelayerTarget();
+            const auth = await connectMetaMaskAuthority({
+              sessionAccount: target,
+              tokenAddress: GRANT_TOKEN,
+              periodAmount: amountBaseUnits,
+              periodSecs: periodSecs || GRANT_PERIOD_SECS,
+              expirySecs: GRANT_EXPIRY_SECS,
+              nowUnix: Math.floor(Date.now() / 1000),
+              justification,
+            });
+            config.update({
+              sessionAccount: auth.sessionAccount,
+              metaMaskGrant: JSON.stringify(auth.granted),
+              grantTokenAddress: auth.tokenAddress,
+              grantMaxAmount: auth.periodAmount,
+              grantExpiryUnix: auth.expiryUnix,
+            });
+            const per = periodSecs === 604_800 ? "week" : "day";
+            return { ok: true, detail: `${Number(amountBaseUnits) / 1_000_000} USDC / ${per}` };
+          } catch (e) {
+            return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+          }
+        },
       };
       const res = await runMasterTurn(system, history, answers, {
         infer: async (msgs) =>

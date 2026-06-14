@@ -28,9 +28,34 @@ import express from "express";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import type { Network } from "@x402/express";
 import type { RoutesConfig } from "@x402/core/server";
+import { HTTPFacilitatorClient } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { create1ShotAPIFacilitatorClient } from "@1shotapi/x402-facilitator";
 import { proxyCompletion, UpstreamError, type UpstreamConfig } from "./upstream.js";
+
+/**
+ * ERC-7710 delegation settlement (the MetaMask-Smart-Account native-x402 path).
+ *
+ * Default gateway settles `exact`/EIP-3009 via the 1Shot facilitator. When
+ * `X402_ASSET_TRANSFER_METHOD=erc7710`, the gateway instead advertises an ERC-7710
+ * DELEGATION payment (so the buyer pays with a signed MetaMask Smart Account delegation,
+ * not a token authorization) and settles it via MetaMask's sentinel facilitator.
+ * Proven end-to-end in spike 11 (`spikes/11-x402-erc7710-delegation/`): the buyer MUST be an
+ * EIP-7702-delegated account or MetaMask rejects `account_not_delegated`, and the method MUST
+ * be advertised in `extra` (the buyer reads `paymentRequirements.extra.assetTransferMethod`).
+ */
+class Erc7710Scheme extends ExactEvmScheme {
+  async enhancePaymentRequirements(
+    ...args: Parameters<ExactEvmScheme["enhancePaymentRequirements"]>
+  ): ReturnType<ExactEvmScheme["enhancePaymentRequirements"]> {
+    const base = await super.enhancePaymentRequirements(...args);
+    const b = base as unknown as Record<string, unknown>;
+    return {
+      ...b,
+      extra: { ...(b.extra as Record<string, unknown> | undefined), assetTransferMethod: "erc7710" },
+    } as unknown as Awaited<ReturnType<ExactEvmScheme["enhancePaymentRequirements"]>>;
+  }
+}
 
 // Best-effort .env load (Node ≥20.12). Env may also be supplied by the parent process.
 try {
@@ -44,6 +69,13 @@ const NETWORK = (process.env.X402_NETWORK ?? "eip155:84532") as Network;
 const PRICE = process.env.X402_PRICE ?? "$0.001";
 const PAY_TO = process.env.EVM_ADDRESS ?? "";
 const BYPASS = process.env.X402_BYPASS === "true";
+// "erc3009" (default) settles via the 1Shot facilitator; "erc7710" advertises an ERC-7710
+// MetaMask-Smart-Account delegation payment + settles via the MetaMask sentinel facilitator.
+const ASSET_TRANSFER_METHOD = (process.env.X402_ASSET_TRANSFER_METHOD ?? "erc3009").toLowerCase();
+const USE_ERC7710 = ASSET_TRANSFER_METHOD === "erc7710";
+const MM_FACILITATOR_URL =
+  process.env.MM_FACILITATOR_URL ??
+  "https://tx-sentinel-base-sepolia.dev-api.cx.metamask.io/platform/v2/x402";
 
 const ONESHOT_API_KEY = process.env.ONESHOT_API_KEY ?? "";
 const ONESHOT_API_SECRET = process.env.ONESHOT_API_SECRET ?? "";
@@ -81,13 +113,14 @@ if (!BYPASS) {
   if (!PAY_TO) {
     throw new Error("EVM_ADDRESS (x402 payTo) is required unless X402_BYPASS=true");
   }
-  const facilitator = create1ShotAPIFacilitatorClient({
-    apiKey: ONESHOT_API_KEY,
-    apiSecret: ONESHOT_API_SECRET,
-  });
+  // ERC-7710 path → MetaMask sentinel facilitator + the delegation-advertising scheme.
+  // Default path → 1Shot facilitator + the plain exact (EIP-3009) scheme.
+  const facilitator = USE_ERC7710
+    ? new HTTPFacilitatorClient({ url: MM_FACILITATOR_URL })
+    : create1ShotAPIFacilitatorClient({ apiKey: ONESHOT_API_KEY, apiSecret: ONESHOT_API_SECRET });
   const resourceServer = new x402ResourceServer(facilitator).register(
     NETWORK,
-    new ExactEvmScheme(),
+    USE_ERC7710 ? new Erc7710Scheme() : new ExactEvmScheme(),
   );
   const routes: RoutesConfig = Object.fromEntries(
     CHAT_PATHS.map((p) => [
@@ -126,6 +159,7 @@ for (const p of CHAT_PATHS) app.post(p, handleChat);
 app.listen(PORT, () => {
   console.log(
     `[x402-inference] listening on :${PORT} — mode=${BYPASS ? "bypass" : "x402"} ` +
-      `network=${NETWORK} price=${PRICE} payTo=${PAY_TO || "(none)"}`,
+      `network=${NETWORK} price=${PRICE} payTo=${PAY_TO || "(none)"} ` +
+      `assetTransferMethod=${USE_ERC7710 ? "erc7710 (MetaMask facilitator)" : "erc3009 (1Shot)"}`,
   );
 });

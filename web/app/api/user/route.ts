@@ -35,6 +35,8 @@ export async function PUT(req: Request) {
   // Allow-list the known fields only — never persist anything else a client sends.
   const data: UserData = {};
   if (body.profile && typeof body.profile === "object") data.profile = body.profile as UserData["profile"];
+  if (body.signingWallet && typeof body.signingWallet === "object")
+    data.signingWallet = body.signingWallet as UserData["signingWallet"];
   if (Array.isArray(body.chats)) data.chats = body.chats;
   if (Array.isArray(body.automations)) data.automations = body.automations;
   await putUserData(address, data);

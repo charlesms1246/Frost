@@ -34,6 +34,17 @@ export type ToolContext = {
   fallbackRpcUrl: string;
   /** Chain id for explorer lookups (8453 = Base mainnet). */
   chainId: number;
+  /**
+   * WRITE seam for `request_authority`: drive a NEW ERC-7715 USDC spending grant via the
+   * MetaMask bridge (opens MetaMask for the user to approve a scoped, revocable permission).
+   * The chat page supplies it (it has the wallet bridge); omitted ⇒ the tool reports it's
+   * unavailable (e.g. no wallet context / tests).
+   */
+  requestAuthority?: (req: {
+    amountBaseUnits: bigint;
+    periodSecs: number;
+    justification: string;
+  }) => Promise<{ ok: boolean; detail: string }>;
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: ToolFetch;
 };
@@ -51,6 +62,24 @@ export type MasterTool = {
 const WETH = "0x4200000000000000000000000000000000000006" as Address;
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address;
 const QUOTER = "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a" as Address;
+
+// The model often passes token SYMBOLS ("ETH"/"WETH"/"USDC") where an address is required;
+// viem then throws `Address "ETH" is invalid`. Resolve known symbols to addresses, accept a
+// literal 0x address, and fall back to the default for anything unrecognized (never crash).
+const TOKEN_SYMBOLS: Record<string, Address> = {
+  ETH: WETH,
+  WETH: WETH,
+  WRAPPEDETHER: WETH,
+  USDC: USDC,
+  USD: USDC,
+  USDCOIN: USDC,
+};
+function resolveToken(raw: string, fallback: Address): Address {
+  const t = raw.trim();
+  if (!t) return fallback;
+  if (/^0x[0-9a-fA-F]{40}$/.test(t)) return t as Address;
+  return TOKEN_SYMBOLS[t.toUpperCase().replace(/[^A-Z]/g, "")] ?? fallback;
+}
 
 const fail = (msg: string): ToolResult => ({ ok: false, summary: msg, observation: `ERROR: ${msg}` });
 const str = (a: Record<string, unknown>, k: string): string =>
@@ -129,10 +158,13 @@ const TOOLS: MasterTool[] = [
   },
   {
     name: "price_quote",
-    description: "Best live DEX quote on Base (Uniswap v3). args: { tokenIn?, tokenOut?, amountIn? } — defaults 1 WETH → USDC.",
+    description:
+      "Best live DEX quote on Base (Uniswap v3). args: { tokenIn?, tokenOut?, amountIn? } — pass token " +
+      "SYMBOLS (ETH/WETH/USDC) or 0x addresses. amountIn is in tokenIn BASE UNITS (1 WETH = " +
+      "1000000000000000000, 1 USDC = 1000000); omit for 1 token. Defaults 1 WETH → USDC.",
     run: async (args, ctx) => {
-      const tokenIn = (str(args, "tokenIn") || WETH) as Address;
-      const tokenOut = (str(args, "tokenOut") || USDC) as Address;
+      const tokenIn = resolveToken(str(args, "tokenIn"), WETH);
+      const tokenOut = resolveToken(str(args, "tokenOut"), USDC);
       let amountIn = 10n ** 18n;
       if (args.amountIn !== undefined) {
         try {
@@ -148,6 +180,31 @@ const TOOLS: MasterTool[] = [
         ok: true,
         summary: `best ${res.best.source}: ${res.best.amountOut}`,
         observation: `best quote: ${res.best.amountOut} out via ${res.best.source} for amountIn ${amountIn} (${tokenIn} → ${tokenOut})`,
+      };
+    },
+  },
+  {
+    name: "request_authority",
+    description:
+      "Request a NEW scoped USDC spending permission from the user via MetaMask (ERC-7715). Use ONLY " +
+      "when a task needs authority the user has not granted yet — e.g. a bigger per-period budget to " +
+      "fund a swap beyond the existing grant. Opens MetaMask for the user to review + approve a " +
+      "human-readable, revocable permission. args: { amount: number (USDC per period), period?: " +
+      "'day'|'week', justification?: string }.",
+    run: async (args, ctx) => {
+      if (!ctx.requestAuthority) return fail("authority requests need a connected wallet (unavailable here)");
+      const amount = typeof args.amount === "number" ? args.amount : Number(str(args, "amount"));
+      if (!Number.isFinite(amount) || amount <= 0) return fail("amount must be a positive number of USDC per period");
+      const period = str(args, "period").toLowerCase();
+      const periodSecs = period === "week" ? 604_800 : 86_400; // default: per day
+      const amountBaseUnits = BigInt(Math.round(amount * 1_000_000)); // USDC has 6 decimals
+      const justification = str(args, "justification") || `Agent-requested budget: ${amount} USDC / ${period || "day"}`;
+      const r = await ctx.requestAuthority({ amountBaseUnits, periodSecs, justification });
+      if (!r.ok) return fail(`authority request declined or failed: ${r.detail}`);
+      return {
+        ok: true,
+        summary: `new permission: ${amount} USDC / ${period || "day"}`,
+        observation: `the user approved a new ERC-7715 permission (${r.detail}). You may now act within this budget.`,
       };
     },
   },
