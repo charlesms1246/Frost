@@ -53,6 +53,12 @@ type State =
   | { kind: "requesting"; spec: PermissionRequest[] }
   | { kind: "posting"; granted: unknown }
   | { kind: "done"; granted: unknown; callbackStatus: number }
+  | {
+      kind: "snap-error";
+      spec: PermissionRequest[];
+      detection: Extract<MMDetection, { kind: "flask-ok" }>;
+      raw: string;
+    }
   | { kind: "error"; message: string };
 
 function parseSpec(rawParams: string): PermissionRequest[] {
@@ -162,6 +168,42 @@ function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   );
 }
 
+// Inline remediation for MetaMask's snap-sandbox init failure. This error is
+// environment-side (the `permissions-kernel-snap` iframe from execution.metamask.io
+// couldn't load) — the grant request itself is correct. The checklist mirrors
+// ERRORS.MD's ordered remediation so a live attempt doesn't dead-end on the raw string.
+const SNAP_REMEDIATION = [
+  "Reload this page and click Approve again — the snap sandbox load is timing-sensitive and often succeeds on a retry.",
+  "Don't use Incognito/Private mode — snap storage is partitioned there and the sandbox can't initialize.",
+  "Unblock execution.metamask.io for this tab: disable ad-block / privacy extensions / Brave Shields, and allow third-party cookies & storage.",
+  "Update MetaMask Flask to the latest version, then fully restart your browser.",
+  "In MetaMask → Settings → Snaps, confirm the permissions / smart-accounts snap is enabled.",
+  "If it still fails, try a clean browser profile (fresh MetaMask Flask install).",
+];
+
+function SnapRemediation({ raw, onRetry }: { raw: string; onRetry: () => void }) {
+  return (
+    <div className="connect-sub">
+      <p className="txt-err">
+        MetaMask couldn’t start its permissions snap, so the grant can’t be signed yet. This is a
+        MetaMask environment issue, not a problem with the request. Work through these, then retry:
+      </p>
+      <ol className="connect-card" style={{ marginTop: 10, paddingLeft: 28 }}>
+        {SNAP_REMEDIATION.map((step, i) => (
+          <li key={i} style={{ marginBottom: 6 }}>{step}</li>
+        ))}
+      </ol>
+      <button onClick={onRetry} className="frost-btn" style={{ marginTop: 12 }}>
+        Retry grant
+      </button>
+      <details className="connect-debug" style={{ marginTop: 10 }}>
+        <summary>original error</summary>
+        <pre className="code-block err" style={{ marginTop: 8 }}>{raw}</pre>
+      </details>
+    </div>
+  );
+}
+
 function GrantInner() {
   const params = useSearchParams();
   const challenge = params.get("challenge") ?? "";
@@ -198,9 +240,10 @@ function GrantInner() {
     });
   }, [parsedSpec]);
 
-  async function approve() {
-    if (state.kind !== "ready") return;
-    const { spec, detection } = state;
+  async function runGrant(
+    spec: PermissionRequest[],
+    detection: Extract<MMDetection, { kind: "flask-ok" }>,
+  ) {
     setState({ kind: "requesting", spec });
     try {
       const provider = detection.detail.provider;
@@ -270,6 +313,17 @@ function GrantInner() {
       setState({ kind: "done", granted, callbackStatus: res.status });
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : JSON.stringify(e);
+      // MetaMask's ERC-7715 grant runs inside the `permissions-kernel-snap` sandbox
+      // (an iframe served from execution.metamask.io). When that sandbox can't load,
+      // the kit throws a snap-executor init error that is environment-side, not ours —
+      // show the user the targeted remediation checklist + a one-click retry instead of
+      // the raw internal string. See ERRORS.MD (2026-06-06 snap-sandbox blocker).
+      const isSnapInit =
+        /permissions-kernel-snap|failed to initialize|(iframe|webview|worker) failed to load/i.test(raw);
+      if (isSnapInit) {
+        setState({ kind: "snap-error", spec, detection, raw });
+        return;
+      }
       const isInternal = /internal account|sign delegations/i.test(raw);
       const message = isInternal
         ? `MetaMask refused to sign the delegation. This account couldn't be used as a Smart Account ` +
@@ -296,7 +350,8 @@ function GrantInner() {
         state.kind === "checking" ||
         state.kind === "requesting" ||
         state.kind === "posting" ||
-        state.kind === "done") &&
+        state.kind === "done" ||
+        state.kind === "snap-error") &&
         "spec" in state &&
         state.spec.map((req, i) => <PermissionPreview key={i} req={req} nowSecs={nowSecs} />)}
 
@@ -309,7 +364,9 @@ function GrantInner() {
       )}
 
       {state.kind === "ready" && (
-        <button onClick={approve} className="frost-btn">Approve in MetaMask</button>
+        <button onClick={() => runGrant(state.spec, state.detection)} className="frost-btn">
+          Approve in MetaMask
+        </button>
       )}
 
       {state.kind === "checking" && <p className="status-line">Checking smart-account status…</p>}
@@ -321,6 +378,10 @@ function GrantInner() {
           <p className="txt-ok">Done. Callback HTTP {state.callbackStatus}.</p>
           <p className="txt-muted">You can close this tab.</p>
         </div>
+      )}
+
+      {state.kind === "snap-error" && (
+        <SnapRemediation raw={state.raw} onRetry={() => runGrant(state.spec, state.detection)} />
       )}
 
       {state.kind === "error" && <pre className="code-block err">{state.message}</pre>}
