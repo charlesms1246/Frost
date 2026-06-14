@@ -16,6 +16,7 @@ export * from "./inference/venice-inference.js";
 export * from "./inference/switching.js";
 export * from "./inference/x402-inference.js";
 export * from "./inference/x402-signer.js";
+export * from "./inference/x402-delegation.js";
 export {
   buildReceipt,
   hashLeaf,
