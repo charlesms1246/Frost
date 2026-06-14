@@ -17,8 +17,10 @@ export default defineConfig({
     alias: {
       $lib: resolve(__dirname, "src/lib"),
       // SvelteKit virtual modules aren't provided under plain vitest — stub the
-      // ones our store modules touch (theme/profile import `browser`).
+      // ones our store modules touch (theme/profile import `browser`; flags.ts
+      // reads PUBLIC_* env).
       "$app/environment": resolve(__dirname, "src/lib/test/app-environment-stub.ts"),
+      "$env/dynamic/public": resolve(__dirname, "src/lib/test/env-dynamic-public-stub.ts"),
     },
     conditions: ["browser"],
   },

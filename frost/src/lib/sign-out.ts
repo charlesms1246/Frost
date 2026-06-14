@@ -3,6 +3,7 @@ import { config } from "$lib/stores/config.svelte";
 import { chats } from "$lib/stores/chats.svelte";
 import { customAgents } from "$lib/stores/custom-agents.svelte";
 import { profile } from "$lib/stores/profile.svelte";
+import { cloudSession } from "$lib/cloud";
 import { TauriKeyStore } from "$lib/key-store";
 import type { InvokeFn } from "$lib/agent/metamask-issuer";
 
@@ -79,11 +80,13 @@ export async function signOut(deps: SignOutDeps = {}): Promise<SignOutResult> {
     }
   }
 
-  // 3 — wipe everything persisted locally (the grant blob, chats, agents, profile).
+  // 3 — wipe everything persisted locally (the grant blob, chats, agents, profile,
+  //     and the cloud session JWT — the cloud data itself persists server-side).
   config.clear();
   chats.clearAll();
   customAgents.clearAll();
   profile.clear();
+  cloudSession.clear();
 
   return revokeError ? { revoked, revokeError } : { revoked };
 }

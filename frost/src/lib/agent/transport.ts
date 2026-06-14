@@ -8,7 +8,7 @@ import {
 import type { InferenceTransport, RouteInfo, SettleInfo } from "@frost/agent/browser";
 import type { LocalAccount } from "viem";
 import { config, fallbackKeyOf } from "$lib/stores/config.svelte";
-import { VENICE_DISABLED } from "$lib/flags";
+import { veniceKill } from "$lib/stores/venice.svelte";
 
 /**
  * Build the inference transport from the persisted config — the single place
@@ -57,8 +57,10 @@ export function buildTransport(opts?: {
     });
   };
 
-  // VENICE_DISABLED (cost control) forces the fallback path everywhere — no Venice calls.
-  const hasVenice = !VENICE_DISABLED && c.veniceApiKey.trim() !== "" && c.veniceModels[0].trim() !== "";
+  // The Venice kill switch (cost control / live title-bar toggle) forces the fallback
+  // path everywhere — no Venice calls. Read at build time so a live toggle takes effect
+  // on the next transport build.
+  const hasVenice = !veniceKill.disabled && c.veniceApiKey.trim() !== "" && c.veniceModels[0].trim() !== "";
   const hasFallback = fallbackKeyOf(c).trim() !== "" && c.fallbackModels[0].trim() !== "";
   // The model string must match the active leg (pinning makes it moot, but keep it honest).
   const model = hasVenice ? c.veniceModels[0] : c.fallbackModels[0];

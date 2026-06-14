@@ -6,7 +6,7 @@
   import { Label } from "$lib/components/ui/label";
   import { profile } from "$lib/stores/profile.svelte";
   import { config } from "$lib/stores/config.svelte";
-  import { captureMetaMaskAuthority } from "$lib/wallet-connect";
+  import { cloudSignInAndPull } from "$lib/cloud";
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Wallet from "@lucide/svelte/icons/wallet";
 
@@ -15,13 +15,16 @@
   let connecting = $state(false);
   let walletError = $state("");
 
+  // Wallet-first, passwordless: signing a SIWE challenge proves identity and pulls
+  // this user's profile / chats / automations back from the cloud (cross-device
+  // restore). Delegation (the spending grant) is handled by the in-app gate.
   async function connectWallet() {
     if (connecting) return;
     connecting = true;
     walletError = "";
     try {
-      const { granter } = await captureMetaMaskAuthority();
-      if (granter) profile.update({ walletAddress: granter });
+      const { address } = await cloudSignInAndPull();
+      if (address) profile.update({ walletAddress: address });
       await goto(config.onboarded ? "/chat" : "/setup");
     } catch (e) {
       walletError = e instanceof Error ? e.message : String(e);
@@ -42,7 +45,7 @@
 
 <AuthShell quote="Welcome back." subquote="Your mandates, agents, and audit trail are right where you left them.">
   <h1 class="text-2xl font-semibold tracking-tight">Sign in</h1>
-  <p class="mt-1 text-sm text-muted-foreground">Enter your email to access your account.</p>
+  <p class="mt-1 text-sm text-muted-foreground">Sign in with your wallet to restore your account, or continue with a saved profile.</p>
 
   {#if hasProfile}
     <button
@@ -62,24 +65,23 @@
   {/if}
 
   <form class="mt-6 flex flex-col gap-4" onsubmit={(e) => { e.preventDefault(); continueIn(); }}>
+    <Button type="button" size="lg" onclick={connectWallet} disabled={connecting}>
+      {#if connecting}<Loader2 class="size-4 animate-spin" />{:else}<Wallet class="size-4" />{/if}
+      Sign in with wallet
+    </Button>
+
+    <div class="flex items-center gap-3 text-[11px] text-muted-foreground">
+      <span class="h-px flex-1 bg-border"></span>or continue with a saved profile<span class="h-px flex-1 bg-border"></span>
+    </div>
+
     <div class="grid gap-1.5">
       <Label for="email">Email</Label>
       <Input id="email" type="email" bind:value={email} placeholder="you@example.com" autocomplete="email" />
     </div>
-    <div class="grid gap-1.5">
-      <Label for="pw">Password</Label>
-      <Input id="pw" type="password" placeholder="••••••••" autocomplete="current-password" />
-      <p class="text-[10px] text-muted-foreground">Auth is wallet-first; the password field is cosmetic until the hosted account backend lands.</p>
-    </div>
 
-    <Button type="submit" size="lg" disabled={submitting} class="mt-1">
+    <Button type="submit" size="lg" variant="outline" disabled={submitting}>
       {#if submitting}<Loader2 class="size-4 animate-spin" />{/if}
-      Sign in
-    </Button>
-
-    <Button type="button" size="lg" variant="outline" onclick={connectWallet} disabled={connecting}>
-      {#if connecting}<Loader2 class="size-4 animate-spin" />{:else}<Wallet class="size-4" />{/if}
-      Sign in with wallet
+      Continue
     </Button>
     {#if walletError}<p class="text-xs text-destructive break-all">{walletError}</p>{/if}
   </form>

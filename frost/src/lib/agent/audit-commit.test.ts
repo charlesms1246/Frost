@@ -10,7 +10,10 @@ import { FROST_BASE_SEPOLIA } from "@frost/sdk";
 describe("audit-commit", () => {
   it("reports not-configured while the AuditRegistry address is the zero address", () => {
     // The committed default ships with a zero address (deploy is a separate, manual step).
-    expect(auditRegistryConfigured()).toBe(FROST_BASE_SEPOLIA.auditRegistry !== "0x0000000000000000000000000000000000000000");
+    // Widen to `string` — `auditRegistry` is typed as the deployed address literal.
+    expect(auditRegistryConfigured()).toBe(
+      (FROST_BASE_SEPOLIA.auditRegistry as string) !== "0x0000000000000000000000000000000000000000",
+    );
   });
 
   it("refuses to commit while the AuditRegistry is undeployed (no silent no-op)", async () => {

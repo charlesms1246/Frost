@@ -20,6 +20,7 @@
   import { X402_INFERENCE_URL } from "$lib/flags";
   import { liveCommitAudit, liveCommitAuditWithSig, requestAuditCommitSignature } from "$lib/agent/audit-commit";
   import { buildTransport } from "$lib/agent/transport";
+  import { veniceKill } from "$lib/stores/venice.svelte";
   import { TauriKeyStore } from "$lib/key-store";
   import { customAgents, toDefinition } from "$lib/stores/custom-agents.svelte";
   import {
@@ -247,10 +248,22 @@
     // we know their address, the executor redeems the grant on-chain (a USDC self-transfer
     // of the notional — proves redemption, moves nothing out). Same HITL gate as the
     // simulated path. Otherwise simulate (no grant ⇒ no real submit).
+    //
+    // T-21 DISPOSITION (IG-09): unlike the private-mempool 1Shot path above, the 1Shot
+    // PUBLIC relayer does not promise a private mempool, so the T-21 mitigation (no public
+    // mempool for executor txs) is NOT enforced on this branch — it is an explicit testnet
+    // caveat, negligible on Base Sepolia. This path is the lower-priority fallback and is
+    // OFF the recorded demo (which uses the private 1Shot path above). There is no silent
+    // private→public fallback: the private submit either lands or fails, it never silently
+    // re-routes here. We surface the weaker guarantee at runtime rather than hide it.
     const grant = config.value.metaMaskGrant;
     const userAddr = profile.value.walletAddress;
     if (grant && userAddr && /^0x[0-9a-fA-F]{40}$/.test(userAddr)) {
       const notionalUsdc = execNotional();
+      store.note(
+        "Executing via the 1Shot PUBLIC relayer — this path does not guarantee a private " +
+          "mempool (T-21 weakened; testnet caveat). The private-mempool path requires demo creds.",
+      );
       return makeRelayerExecutorRunner({
         granted: JSON.parse(grant),
         spec,
@@ -267,6 +280,15 @@
   let lastResultText = $state("");
   let switcher: SwitchingInferenceTransport | undefined;
   let transportRef: InferenceTransport | undefined;
+
+  // Live Venice kill-switch (title-bar toggle): drop the cached transport so the next
+  // inference call rebuilds with the new provider choice. `ensureTransport` reads the
+  // current kill-switch value via `buildTransport`, so the toggle takes effect mid-session.
+  $effect(() => {
+    veniceKill.disabled; // track the toggle
+    transportRef = undefined;
+    switcher = undefined;
+  });
 
   // --- audit receipt (§10.7/§10.8): a live Merkle commitment over the session trail ---
   const receipt = $derived.by<SessionReceipt | undefined>(() => {

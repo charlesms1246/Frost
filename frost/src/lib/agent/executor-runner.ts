@@ -162,6 +162,11 @@ const fmtUsdc = (n: bigint) => `$${(Number(n) / 1e6).toFixed(2)}`;
  * router in CALLABLE_SURFACE, so the swap-specific §10.3 preflight ({@link
  * makeExecutorRunner}) does not apply here; HITL is the carried-over gate. A swap
  * FunctionCall through the relayer would reinstate the full preflight (follow-up).
+ *
+ * T-21 caveat (IG-09): the public relayer does NOT guarantee a private mempool, unlike
+ * the custodial {@link makeExecutorRunner} path which submits through 1Shot's private
+ * mempool. This runner therefore does not enforce T-21 — an explicit, documented testnet
+ * disposition (negligible on Base Sepolia). The caller surfaces it at runtime.
  */
 export function makeRelayerExecutorRunner(opts: RelayerExecutorOptions): SubAgentRunner {
   return async ({ outcome }) => {
