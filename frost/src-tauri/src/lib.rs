@@ -149,6 +149,7 @@ pub fn run() {
             key_store::key_store_has,
             permission_spec::build_native_token_stream_permission,
             permission_spec::build_erc20_token_stream_permission,
+            permission_spec::build_erc20_token_periodic_permission,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

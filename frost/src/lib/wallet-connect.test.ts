@@ -3,37 +3,38 @@ import { connectMetaMaskAuthority, granterAddressOf } from "./wallet-connect";
 import type { MetaMaskGrantOptions } from "$lib/agent/metamask-issuer";
 
 describe("connectMetaMaskAuthority", () => {
-  it("hex-encodes the scope, computes absolute expiry, and returns the grant", async () => {
+  it("hex-encodes the periodic scope, computes absolute expiry, and returns the grant + context", async () => {
     let seen: MetaMaskGrantOptions | undefined;
     const auth = await connectMetaMaskAuthority(
       {
         sessionAccount: "0x1111111111111111111111111111111111111111",
         tokenAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        maxAmount: 50_000_000n, // $50 USDC
-        amountPerSecond: 1n,
-        expirySecs: 86_400,
+        periodAmount: 10_000_000n, // 10 USDC / period
+        periodSecs: 86_400, // 1 day
+        expirySecs: 604_800,
         nowUnix: 1_000_000,
         justification: "test",
       },
       async (o) => {
         seen = o;
-        return { granted: { delegation: "0xabc" } };
+        return { granted: [{ context: "0xctx", delegationManager: "0xdm", delegation: "0xabc" }] };
       },
     );
 
-    // hex-encoded amounts passed to the bridge
-    expect(seen?.maxAmountHex).toBe("0x" + (50_000_000).toString(16));
-    expect(seen?.amountPerSecondHex).toBe("0x1");
-    // full cap front-loaded so the relayer can redeem immediately (no streaming wait)
-    expect(seen?.initialAmountHex).toBe("0x" + (50_000_000).toString(16));
-    expect(seen?.expirySecs).toBe(86_400);
+    // periodic scope passed to the bridge
+    expect(seen?.periodAmountHex).toBe("0x" + (10_000_000).toString(16));
+    expect(seen?.periodDurationSecs).toBe(86_400);
+    expect(seen?.expirySecs).toBe(604_800);
     expect(seen?.justification).toBe("test");
 
     // structured authority returned for storage/display
     expect(auth.sessionAccount).toBe("0x1111111111111111111111111111111111111111");
-    expect(auth.maxAmount).toBe("50000000");
-    expect(auth.expiryUnix).toBe(1_000_000 + 86_400);
-    expect(auth.granted).toEqual({ delegation: "0xabc" });
+    expect(auth.periodAmount).toBe("10000000");
+    expect(auth.periodSecs).toBe(86_400);
+    expect(auth.expiryUnix).toBe(1_000_000 + 604_800);
+    // redeemable context + manager pulled out of the granted blob
+    expect(auth.context).toBe("0xctx");
+    expect(auth.delegationManager).toBe("0xdm");
   });
 
   it("defaults the justification when omitted", async () => {
@@ -42,8 +43,8 @@ describe("connectMetaMaskAuthority", () => {
       {
         sessionAccount: "0x2222222222222222222222222222222222222222",
         tokenAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        maxAmount: 1n,
-        amountPerSecond: 1n,
+        periodAmount: 1n,
+        periodSecs: 86_400,
         expirySecs: 10,
         nowUnix: 0,
       },

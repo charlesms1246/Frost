@@ -2,9 +2,18 @@ import { requestMetaMaskGrant, type MetaMaskGrantOptions } from "$lib/agent/meta
 import { config } from "$lib/stores/config.svelte";
 import { RelayerClient } from "@frost/agent/browser";
 
-/** Token + scope defaults for the demo grant (Base Sepolia USDC, $50, revocable, 24h). */
+/**
+ * Token + scope defaults for the demo grant: Base Sepolia USDC, an `erc20-token-periodic`
+ * budget of 10 USDC/day for a week, revocable. Periodic (not stream) is the type MetaMask's
+ * Advanced Permissions grant UI actually supports — verified live (see ERRORS.MD breakthrough).
+ */
 export const GRANT_TOKEN = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as `0x${string}`;
-export const GRANT_MAX_USDC = 50_000_000n;
+/** Per-period spend cap (10 USDC). */
+export const GRANT_PERIOD_USDC = 10_000_000n;
+/** Budget period length (1 day) — the cap resets each period. */
+export const GRANT_PERIOD_SECS = 86_400;
+/** Total grant lifetime (1 week). */
+export const GRANT_EXPIRY_SECS = 604_800;
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
 
 /**
@@ -32,12 +41,18 @@ export const RELAYER_TARGET_BASE_SEPOLIA = "0xf1ef956eff4181Ce913b66471351599685
 export type MetaMaskAuthority = {
   /** The agent session account the permission was granted TO (the delegate). */
   sessionAccount: `0x${string}`;
-  /** ERC-20 the session may stream-spend. */
+  /** ERC-20 the session may spend. */
   tokenAddress: `0x${string}`;
-  /** Max total over the stream, token base units (decimal string). */
-  maxAmount: string;
+  /** Per-period spend cap, token base units (decimal string). */
+  periodAmount: string;
+  /** Budget period length in seconds (cap resets each period). */
+  periodSecs: number;
   /** Absolute expiry (unix seconds). */
   expiryUnix: number;
+  /** The redeemable ERC-7715 permission context (`granted[0].context`). */
+  context?: string;
+  /** The DelegationManager the context redeems against (`granted[0].delegationManager`). */
+  delegationManager?: string;
   /** The raw ERC-7715 granted delegation from MetaMask. */
   granted: unknown;
 };
@@ -45,10 +60,10 @@ export type MetaMaskAuthority = {
 export type ConnectAuthorityOptions = {
   sessionAccount: `0x${string}`;
   tokenAddress: `0x${string}`;
-  /** Max total the session may spend, token base units. */
-  maxAmount: bigint;
-  /** Stream rate, base units per second. */
-  amountPerSecond: bigint;
+  /** Per-period spend cap, token base units. */
+  periodAmount: bigint;
+  /** Budget period length in seconds (the cap resets each period). */
+  periodSecs: number;
   /** Lifetime in seconds (→ the ERC-7715 expiry rule). */
   expirySecs: number;
   /** Current unix time (injected so the result is deterministic in tests). */
@@ -58,6 +73,17 @@ export type ConnectAuthorityOptions = {
 
 const toHex = (n: bigint): string => "0x" + n.toString(16);
 
+/** Pull the redeemable `context` + `delegationManager` out of the raw ERC-7715 granted blob. */
+function extractGrantRedemption(granted: unknown): { context?: string; delegationManager?: string } {
+  const g = (Array.isArray(granted) ? granted[0] : granted) as
+    | { context?: unknown; delegationManager?: unknown }
+    | undefined;
+  return {
+    context: typeof g?.context === "string" ? g.context : undefined,
+    delegationManager: typeof g?.delegationManager === "string" ? g.delegationManager : undefined,
+  };
+}
+
 export async function connectMetaMaskAuthority(
   opts: ConnectAuthorityOptions,
   request: (o: MetaMaskGrantOptions) => Promise<{ granted: unknown }> = requestMetaMaskGrant,
@@ -65,19 +91,20 @@ export async function connectMetaMaskAuthority(
   const grant = await request({
     sessionAccount: opts.sessionAccount,
     tokenAddress: opts.tokenAddress,
-    maxAmountHex: toHex(opts.maxAmount),
-    amountPerSecondHex: toHex(opts.amountPerSecond),
-    // Front-load the full cap so the public relayer can redeem immediately (the
-    // streaming enforcer otherwise releases ~0 right after the grant → allowance-exceeded).
-    initialAmountHex: toHex(opts.maxAmount),
+    periodAmountHex: toHex(opts.periodAmount),
+    periodDurationSecs: opts.periodSecs,
     expirySecs: opts.expirySecs,
     justification: opts.justification ?? "Frost agent spending authority — scoped and revocable.",
   });
+  const { context, delegationManager } = extractGrantRedemption(grant.granted);
   return {
     sessionAccount: opts.sessionAccount,
     tokenAddress: opts.tokenAddress,
-    maxAmount: opts.maxAmount.toString(),
+    periodAmount: opts.periodAmount.toString(),
+    periodSecs: opts.periodSecs,
     expiryUnix: opts.nowUnix + opts.expirySecs,
+    context,
+    delegationManager,
     granted: grant.granted,
   };
 }
@@ -138,16 +165,16 @@ export async function captureMetaMaskAuthority(): Promise<{ granter?: string; se
   const auth = await connectMetaMaskAuthority({
     sessionAccount: target,
     tokenAddress: GRANT_TOKEN,
-    maxAmount: GRANT_MAX_USDC,
-    amountPerSecond: 1n,
-    expirySecs: 86_400,
+    periodAmount: GRANT_PERIOD_USDC,
+    periodSecs: GRANT_PERIOD_SECS,
+    expirySecs: GRANT_EXPIRY_SECS,
     nowUnix: Math.floor(Date.now() / 1000),
   });
   config.update({
     sessionAccount: auth.sessionAccount,
     metaMaskGrant: JSON.stringify(auth.granted),
     grantTokenAddress: auth.tokenAddress,
-    grantMaxAmount: auth.maxAmount,
+    grantMaxAmount: auth.periodAmount,
     grantExpiryUnix: auth.expiryUnix,
   });
   return { granter: granterAddressOf(auth.granted, auth.sessionAccount), sessionAccount: auth.sessionAccount };

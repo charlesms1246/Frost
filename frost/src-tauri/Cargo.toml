@@ -14,6 +14,13 @@ edition = "2021"
 name = "frost_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# This machine is RAM-constrained (~7 GB). The frost crate emits THREE crate types
+# (staticlib/cdylib/rlib), and codegen with full debug info (`debuginfo=2`) OOMs rustc.
+# Dropping dev debug info roughly halves codegen memory so `tauri dev` builds reliably; the
+# app still runs (only Rust-side debug symbols are lost — not needed for the demo).
+[profile.dev]
+debug = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -17,7 +17,8 @@
   import { crossCheckedSepoliaQuote, BASE_SEPOLIA_RPCS } from "$lib/agent/rpc-crosscheck";
   import type { Caveat } from "@frost/sdk";
   import { privateKeyToAccount } from "viem/accounts";
-  import { X402_INFERENCE_URL } from "$lib/flags";
+  import { X402_INFERENCE_URL, X402_ASSET_TRANSFER_METHOD } from "$lib/flags";
+  import { ensureSessionDelegated } from "$lib/agent/session-7702";
   import { liveCommitAudit, liveCommitAuditWithSig, requestAuditCommitSignature } from "$lib/agent/audit-commit";
   import { buildTransport } from "$lib/agent/transport";
   import { veniceKill } from "$lib/stores/venice.svelte";
@@ -402,14 +403,42 @@
    * gateway proxies to OpenRouter/Grok. The switcher falls back to the config provider on
    * any payment/transport error, so this is safe to leave on for the demo.
    */
+  // Pull the redeemable ERC-7715 permission `context` (hex) + granter `from` out of the stored
+  // grant blob (`config.metaMaskGrant` = JSON of MetaMask's `granted`). Both are needed to
+  // redelegate the user's budget as the x402 payment source.
+  function grantContextAndGranter(
+    grantJson?: string,
+  ): { context: `0x${string}`; from: `0x${string}` } | undefined {
+    if (!grantJson) return undefined;
+    try {
+      const g = JSON.parse(grantJson);
+      const node = Array.isArray(g) ? g[0] : g;
+      const context = node?.context;
+      const from = node?.from;
+      if (typeof context === "string" && /^0x/i.test(context) && typeof from === "string" && /^0x[0-9a-fA-F]{40}$/.test(from)) {
+        return { context: context as `0x${string}`, from: from as `0x${string}` };
+      }
+    } catch {
+      /* malformed grant — fall through to self-funded */
+    }
+    return undefined;
+  }
+
   function ensureTransport(): InferenceTransport {
     if (transportRef) return transportRef;
     const opts: NonNullable<Parameters<typeof buildTransport>[0]> = { primaryEnabled, onRoute: (i) => store.onRoute(i) };
     if (demo && X402_INFERENCE_URL) {
+      // When the user has granted an ERC-7715 budget (config.metaMaskGrant), redelegate it:
+      // each x402 inference payment then spends the USER's USDC within their grant, not the
+      // session account's own funds. Requires the erc7710 path (the redelegation IS the payment).
+      const grantRedeem =
+        X402_ASSET_TRANSFER_METHOD === "erc7710" ? grantContextAndGranter(config.value.metaMaskGrant) : undefined;
       opts.x402 = {
         baseUrl: X402_INFERENCE_URL,
         account: privateKeyToAccount(demo.sessionKey),
         network: "eip155:84532",
+        assetTransferMethod: X402_ASSET_TRANSFER_METHOD,
+        ...(grantRedeem ? { parentPermissionContext: grantRedeem.context, from: grantRedeem.from } : {}),
         ...(demo.rpcUrl ? { rpcUrl: demo.rpcUrl } : {}),
       };
       opts.onSettle = (info) => { if (info.paymentResponse) store.note("x402 inference payment settled on Base"); };
@@ -489,6 +518,21 @@
     store.beginCycle(spec.description); // preserves revocation across cycles
     activeTab = "tree"; // snap to the camera anchor while agents are live
     try {
+      // ERC-7710 x402 path: the session key must be 7702-delegated to the gator before it can
+      // pay via delegation (else the facilitator rejects `account_not_delegated`, spike 11).
+      // One-time + idempotent; the funded demo account is usually already delegated.
+      if (demo && X402_INFERENCE_URL && X402_ASSET_TRANSFER_METHOD === "erc7710") {
+        try {
+          const r = await ensureSessionDelegated({
+            account: privateKeyToAccount(demo.sessionKey),
+            ...(demo.rpcUrl ? { rpcUrl: demo.rpcUrl } : {}),
+          });
+          if (r.status === "upgraded") store.note(`Session key upgraded to a Smart Account (7702) — ${r.txHash.slice(0, 10)}…`);
+          else if (r.status === "wrong-impl") store.note("Session key has a non-gator 7702 impl — x402 delegation may be rejected.");
+        } catch (e) {
+          store.note(`Session 7702 upgrade skipped: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       const transport = ensureTransport();
       // Issuance: LIVE on Base Sepolia when demo creds are loaded (real root mandate via
       // the funded session key, then real sub-mandates under it); else simulated.

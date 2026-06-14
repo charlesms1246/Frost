@@ -98,15 +98,11 @@ fn allowed_origins() -> &'static [&'static str] {
     }
 }
 
-/// Bridge base URL. Override with `FROST_BRIDGE_BASE` for spike work.
+/// Bridge base URL — the deployed backend (auth + connect pages) at xfrost.vercel.app,
+/// used in BOTH dev and release so the redirect opens the live `/connect/*` pages.
+/// Override with `FROST_BRIDGE_BASE=http://localhost:3000` to drive a local `web/` server.
 fn bridge_base() -> String {
-    std::env::var("FROST_BRIDGE_BASE").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "http://localhost:3000".to_string()
-        } else {
-            "https://xfrost.vercel.app".to_string()
-        }
-    })
+    std::env::var("FROST_BRIDGE_BASE").unwrap_or_else(|_| "https://xfrost.vercel.app".to_string())
 }
 
 fn make_challenge() -> String {

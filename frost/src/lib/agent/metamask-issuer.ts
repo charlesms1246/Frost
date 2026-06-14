@@ -6,7 +6,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
  *
  * This drives the existing wallet bridge end-to-end from the embedded runtime:
  *   1. Build the ERC-7715 permission spec via the Rust `permission_spec` builders
- *      (`build_erc20_token_stream_permission`) — the single source of the Flask
+ *      (`build_erc20_token_periodic_permission`) — the single source of the Flask
  *      13.32 schema (`wallet-bridge-spec.md` §4).
  *   2. Drive the Tauri bridge (`wallet_bridge_perform`, op `grant_permissions`): it
  *      opens the user's browser to `xfrost.vercel.app/connect/grant-permissions`,
@@ -15,9 +15,9 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
  *   3. Return the ERC-7715 `granted` delegation.
  *
  * IMPORTANT — what this grant IS vs. is NOT (the open design decision):
- *   - The grant is an ERC-7715 token-STREAM spending delegation to `sessionAccount`
- *     (the master agent). It lets that account spend up to `maxAmount` of the user's
- *     tokens, enforced by MetaMask's Delegation Manager.
+ *   - The grant is an ERC-7715 token-PERIODIC spending delegation to `sessionAccount`
+ *     (the master agent). It lets that account spend up to `periodAmount` of the user's
+ *     tokens per period, enforced by MetaMask's Delegation Manager.
  *   - It is NOT the Frost `Mandate` contract's caveat-tree root (what
  *     `createLiveRootMandate`/`liveSdkIssuer` write). Connecting the two — so the
  *     executor spends the USER's tokens via an ERC-7710 redelegation chain rather
@@ -35,19 +35,18 @@ export type InvokeFn = <T>(
 export interface MetaMaskGrantOptions {
   /** The delegate the permission is granted TO — the master-agent session account. */
   sessionAccount: `0x${string}`;
-  /** ERC-20 the session may stream-spend (e.g. USDC on Base Sepolia). */
+  /** ERC-20 the session may spend (e.g. USDC on Base Sepolia). */
   tokenAddress: `0x${string}`;
-  /** Max total the session may spend over the stream, hex base-units. */
-  maxAmountHex: string;
-  /** Stream rate, hex base-units per second. */
-  amountPerSecondHex: string;
   /**
-   * Amount available IMMEDIATELY at t=0, hex base-units. The ERC-20 streaming enforcer
-   * only releases `initialAmount + rate·elapsed` (capped at maxAmount), so a relayer
-   * redemption seconds after the grant needs this front-loaded or it reverts
-   * `ERC20StreamingEnforcer:allowance-exceeded`. Omitted ⇒ Rust default `0x0`.
+   * Per-period spend cap, hex base-units (e.g. 10 USDC = `0x989680`). The periodic
+   * enforcer resets this allowance at the start of each new period — no front-loading
+   * needed (unlike the stream variant). `erc20-token-periodic` is the type MetaMask's
+   * Advanced Permissions grant UI fully supports (stream fell through to the blocked
+   * raw-delegation path; periodic grants cleanly — verified live, see ERRORS.MD).
    */
-  initialAmountHex?: string;
+  periodAmountHex: string;
+  /** Period length in seconds (e.g. 86400 = 1 day); the cap resets each period. */
+  periodDurationSecs: number;
   /** Session lifetime, seconds (becomes the ERC-7715 expiry rule). */
   expirySecs: number;
   /** Human justification shown in the bridge preview + MetaMask. */
@@ -75,15 +74,13 @@ export async function requestMetaMaskGrant(
   const specArgs: Record<string, unknown> = {
     session_account: opts.sessionAccount,
     token_address: opts.tokenAddress,
-    amount_per_second_hex: opts.amountPerSecondHex,
-    max_amount_hex: opts.maxAmountHex,
+    period_amount_hex: opts.periodAmountHex,
+    period_duration_secs: opts.periodDurationSecs,
     expiry_secs: opts.expirySecs,
     justification: opts.justification,
   };
-  if (opts.initialAmountHex)
-    specArgs["initial_amount_hex"] = opts.initialAmountHex;
   if (opts.chainIdHex) specArgs["chain_id_hex"] = opts.chainIdHex;
-  const spec = await invoke<unknown>("build_erc20_token_stream_permission", {
+  const spec = await invoke<unknown>("build_erc20_token_periodic_permission", {
     args: specArgs,
   });
 
