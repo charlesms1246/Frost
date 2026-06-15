@@ -48,6 +48,23 @@ pub struct Erc20StreamArgs {
     pub is_adjustment_allowed: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct Erc20PeriodicArgs {
+    pub session_account: String,
+    pub token_address: String,
+    /// Per-period spend cap, hex base-units (e.g. 10 USDC = `0x989680`).
+    pub period_amount_hex: String,
+    /// Length of each budget period in seconds (e.g. 86400 = 1 day). The cap
+    /// resets at the start of every new period.
+    pub period_duration_secs: u64,
+    pub expiry_secs: u64,
+    pub justification: String,
+    #[serde(default)]
+    pub chain_id_hex: Option<String>,
+    #[serde(default = "default_true")]
+    pub is_adjustment_allowed: bool,
+}
+
 fn default_initial_amount() -> String {
     "0x0".to_string()
 }
@@ -109,6 +126,34 @@ pub fn build_native_token_stream_permission(args: NativeStreamArgs) -> serde_jso
                 "amountPerSecond": args.amount_per_second_hex,
                 "maxAmount": args.max_amount_hex,
                 "initialAmount": args.initial_amount_hex,
+                "startTime": now,
+                "justification": args.justification,
+            }),
+            is_adjustment_allowed: args.is_adjustment_allowed,
+        },
+        rules: vec![expiry_rule(args.expiry_secs)],
+    };
+    serde_json::json!([req])
+}
+
+/// Build an `erc20-token-periodic` ERC-7715 permission spec — a per-period spend
+/// cap that resets each period (e.g. "10 USDC per day"). This is the permission
+/// type MetaMask's Advanced Permissions grant UI fully supports on Base Sepolia
+/// (the `erc20-token-stream` variant falls through to the blocked raw-delegation
+/// path; periodic grants cleanly — verified live 2026-06-14, see ERRORS.MD).
+#[tauri::command]
+pub fn build_erc20_token_periodic_permission(args: Erc20PeriodicArgs) -> serde_json::Value {
+    let now = now_secs();
+    let chain_id = args.chain_id_hex.unwrap_or_else(|| BASE_SEPOLIA_CHAIN_HEX.to_string());
+    let req = PermissionRequest {
+        chain_id,
+        to: args.session_account,
+        permission: PermissionData {
+            kind: "erc20-token-periodic",
+            data: serde_json::json!({
+                "tokenAddress": args.token_address,
+                "periodAmount": args.period_amount_hex,
+                "periodDuration": args.period_duration_secs,
                 "startTime": now,
                 "justification": args.justification,
             }),

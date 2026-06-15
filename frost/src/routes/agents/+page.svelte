@@ -38,7 +38,7 @@
     designing = true;
     saved = false;
     try {
-      const { transport, model } = buildTransport();
+      const { transport, model } = buildTransport({ source: "Agent designer" });
       result = await new AgentDesigner({ transport, model }).design({ description, answers });
     } catch (e) {
       result = undefined;

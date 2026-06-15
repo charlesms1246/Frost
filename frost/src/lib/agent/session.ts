@@ -12,6 +12,9 @@ import {
   priceThresholdCondition,
   CommsAgent,
   DiscordWebhookPoster,
+  EmailPoster,
+  FanoutPoster,
+  type CommsPoster,
   encodeCommsTemplate,
   defaultCaveatEncoder,
   nonceCounter,
@@ -33,6 +36,8 @@ import {
 import type { Address, Hex } from "viem";
 import type { Caveat } from "@frost/sdk";
 import { makeExecutorRunner, type ExecutorRunnerOptions } from "./executor-runner";
+import { CLOUD_API_URL } from "$lib/flags";
+import { QUOTE_SYMBOL, type TokenRef } from "./tokens";
 
 /**
  * The webview embedding of the Frost master-agent runtime.
@@ -102,10 +107,25 @@ export interface EmbeddedSessionOptions {
   veniceApiKey: string;
   veniceNetwork?: string;
 
-  /** Discord comms (optional; the comms runner is wired only when present). */
+  /** Discord comms (optional; a comms channel is wired when present). */
   discordWebhookUrl?: string;
-  /** Values for the comms template's variables at send time. */
-  commsValues?: Record<string, string>;
+  /** Email comms (optional; the recipient — the relay endpoint is the hosted backend). */
+  commsEmail?: string;
+  /** Override the email-relay endpoint (defaults to the hosted backend). */
+  commsEmailEndpoint?: string;
+  /**
+   * Values for the comms template's variables. May be a function evaluated at SEND
+   * time so the social post can include data produced earlier in the cycle (the chosen
+   * token, the swap tx hash) rather than only what was known at session build.
+   */
+  commsValues?: Record<string, string> | (() => Record<string, string>);
+  /**
+   * The token basket to compare against USDC, extracted from the workflow. When set,
+   * the pricer quotes EACH token → USDC (real Base-mainnet reads) and reports the best,
+   * so "compare WETH, DAI and LINK with USDC" executes the user's actual comparison
+   * instead of the fixed WETH→USDC demo. Empty ⇒ the WETH→USDC default.
+   */
+  marketTokens?: TokenRef[];
   /**
    * The COMMS_TEMPLATE caveat ACTUALLY ISSUED in the root mandate (from
    * `createLiveRootMandate`). The comms sub-agent binds its send-time hash check
@@ -208,6 +228,36 @@ export function createEmbeddedSession(opts: EmbeddedSessionOptions): EmbeddedSes
       const amountIn = 10n ** 18n; // 1 WETH
       const fmt = (v: bigint) => `$${(Number(v) / 1e6).toFixed(2)}`;
 
+      // WORKFLOW-DRIVEN comparison: when the workflow named a token basket, quote each
+      // token → USDC (1 unit, real Base-mainnet QuoterV2 reads) and report the best by
+      // USD unit price. This makes "compare WETH, DAI, LINK with USDC" the actual run.
+      if (opts.marketTokens && opts.marketTokens.length > 0) {
+        const quoted: { sym: string; out: bigint }[] = [];
+        for (const t of opts.marketTokens) {
+          try {
+            const r = await new Pricer(venice).quote(
+              { tokenIn: t.address, tokenOut: BASE_MAINNET.usdc, amountIn: 10n ** BigInt(t.decimals) },
+              [500, 3000].map((fee) => uniswapV3Source({ quoter: BASE_MAINNET.quoter, fee })),
+            );
+            if (r.best) quoted.push({ sym: t.symbol, out: r.best.amountOut });
+          } catch {
+            /* skip a token that has no pool / fails to quote */
+          }
+        }
+        if (quoted.length === 0) {
+          return { role: outcome.role, ran: false, detail: `no ${QUOTE_SYMBOL} quotes for ${opts.marketTokens.map((t) => t.symbol).join("/")}` };
+        }
+        quoted.sort((a, b) => (a.out < b.out ? 1 : a.out > b.out ? -1 : 0));
+        const best = quoted[0]!;
+        const summary = quoted.map((q) => `${q.sym} ${fmt(q.out)}`).join(" · ");
+        return {
+          role: outcome.role,
+          ran: true,
+          detail: `${QUOTE_SYMBOL}/token — ${summary} → best ${best.sym}`,
+          quote: { label: best.sym, amountOutUsdc: best.out.toString() },
+        };
+      }
+
       // Aggregator pricers (planner labels "pricer-1inch"/"pricer-paraswap"/…) quote
       // off-chain via Paraswap's keyless REST — a GENUINELY different source from the
       // on-chain Uniswap QuoterV2, so "compare quotes across DEXes" is real (IG-01).
@@ -267,9 +317,25 @@ export function createEmbeddedSession(opts: EmbeddedSessionOptions): EmbeddedSes
     },
   };
 
-  if (opts.discordWebhookUrl && opts.spec.commsTemplate) {
+  // Build the configured comms channels (Discord and/or email); fan out to all.
+  const commsPosters: CommsPoster[] = [];
+  if (opts.discordWebhookUrl) {
+    commsPosters.push(new DiscordWebhookPoster(opts.discordWebhookUrl, fetchImpl));
+  }
+  if (opts.commsEmail) {
+    commsPosters.push(
+      new EmailPoster({
+        endpoint: opts.commsEmailEndpoint ?? `${CLOUD_API_URL}/api/comms/email`,
+        to: opts.commsEmail,
+        fetchImpl,
+      }),
+    );
+  }
+
+  if (commsPosters.length > 0 && opts.spec.commsTemplate) {
     const template = opts.spec.commsTemplate;
-    const poster = new DiscordWebhookPoster(opts.discordWebhookUrl, fetchImpl);
+    const poster: CommsPoster =
+      commsPosters.length === 1 ? commsPosters[0]! : new FanoutPoster(commsPosters);
     // Bind against the COMMS_TEMPLATE caveat ISSUED on-chain when supplied; else
     // reconstruct from the spec (simulated/test, where nothing was committed). This
     // makes the send-time hash check verify the render template against the SIGNED
@@ -277,9 +343,10 @@ export function createEmbeddedSession(opts: EmbeddedSessionOptions): EmbeddedSes
     const committed = opts.commsTemplateCaveat ?? encodeCommsTemplate(template);
     runners.comms = async ({ outcome }) => {
       const mandate = { caveats: [committed] };
+      const values = typeof opts.commsValues === "function" ? opts.commsValues() : opts.commsValues ?? {};
       const res = await new CommsAgent({ poster }).post(mandate, {
         template,
-        values: opts.commsValues ?? {},
+        values,
       });
       return {
         role: outcome.role,

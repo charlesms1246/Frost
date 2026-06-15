@@ -2,13 +2,13 @@
 
 ## Goal
 
-Confirm that the browser's `OPTIONS /callback` preflight succeeds against the Tauri local server for both the dev origin (`http://localhost:3000`) and the prod origin (`https://port42.vercel.app`), with the correct `Access-Control-Allow-*` headers.
+Confirm that the browser's `OPTIONS /callback` preflight succeeds against the Tauri local server for both the dev origin (`http://localhost:3000`) and the prod origin (`https://xfrost.vercel.app`), with the correct `Access-Control-Allow-*` headers.
 
 ## Implementation
 
 CORS handling lives in `frost/src-tauri/src/wallet_bridge.rs`. Two functions are relevant:
 
-- `allowed_origins()` — returns `["https://port42.vercel.app", "http://localhost:3000"]` in dev builds (`#[cfg(debug_assertions)]`), and `["https://port42.vercel.app"]` only in release.
+- `allowed_origins()` — returns `["https://xfrost.vercel.app", "http://localhost:3000"]` in dev builds (`#[cfg(debug_assertions)]`), and `["https://xfrost.vercel.app"]` only in release.
 - `write_preflight()` — responds `204 No Content` with:
   ```
   Access-Control-Allow-Origin: <origin>
@@ -38,10 +38,10 @@ If you see only the POST (no OPTIONS), the request was treated as "simple"; veri
 # In frost/src-tauri, build in release mode:
 cargo build --release
 # Then run the desktop app with FROST_BRIDGE_BASE forcing the prod connect host:
-$env:FROST_BRIDGE_BASE = "https://port42.vercel.app"   # PowerShell
+$env:FROST_BRIDGE_BASE = "https://xfrost.vercel.app"   # PowerShell
 ```
 
-Trigger `/bridge` → Run with `echo`. The browser will load the prod page (once deployed); the prod page POSTs back to the same `localhost:<port>/callback` from origin `https://port42.vercel.app`. The OPTIONS should also succeed.
+Trigger `/bridge` → Run with `echo`. The browser will load the prod page (once deployed); the prod page POSTs back to the same `localhost:<port>/callback` from origin `https://xfrost.vercel.app`. The OPTIONS should also succeed.
 
 ### Path C — quick CLI curl (no browser)
 
@@ -53,7 +53,7 @@ curl -i -X OPTIONS http://127.0.0.1:<port>/callback `
   -H "Access-Control-Request-Headers: Content-Type"
 ```
 
-Expected: `204 No Content` with the three Allow-* headers above.
+Expected: `204 No Content` with the three Allow-\* headers above.
 
 ```
 curl -i -X OPTIONS http://127.0.0.1:<port>/callback `
@@ -66,5 +66,5 @@ Expected: `204` with `Access-Control-Allow-Origin: null` — the browser will re
 ## Pass criteria
 
 - Dev preflight from `http://localhost:3000` returns 204 with the right headers.
-- Prod preflight from `https://port42.vercel.app` returns 204 with the right headers.
+- Prod preflight from `https://xfrost.vercel.app` returns 204 with the right headers.
 - An untrusted origin returns `Allow-Origin: null` (or no Allow-Origin), blocking the POST.

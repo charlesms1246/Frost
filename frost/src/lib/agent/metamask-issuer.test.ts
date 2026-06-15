@@ -20,32 +20,32 @@ function fakeInvoke(responses: Record<string, unknown>): InvokeFn & { calls: Cal
 const opts = {
   sessionAccount: ("0x" + "11".repeat(20)) as `0x${string}`,
   tokenAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as `0x${string}`,
-  maxAmountHex: "0xf4240", // 1 USDC
-  amountPerSecondHex: "0x1",
-  expirySecs: 86_400,
+  periodAmountHex: "0x989680", // 10 USDC
+  periodDurationSecs: 86_400, // 1 day
+  expirySecs: 604_800,
   justification: "Frost session",
 };
 
 describe("requestMetaMaskGrant", () => {
-  it("builds the ERC-7715 spec in Rust, then drives the bridge, returning the grant", async () => {
+  it("builds the ERC-7715 periodic spec in Rust, then drives the bridge, returning the grant", async () => {
     const spec = [{ chainId: "0x14a34", to: opts.sessionAccount }];
     const invoke = fakeInvoke({
-      build_erc20_token_stream_permission: spec,
+      build_erc20_token_periodic_permission: spec,
       wallet_bridge_perform: { challenge: "c", body: { challenge: "c", granted: { permission: "0xdead" } } },
     });
 
     const res = await requestMetaMaskGrant(opts, invoke);
 
     expect(res.granted).toEqual({ permission: "0xdead" });
-    // Step 1: spec built via the Rust builder with snake_case args.
-    expect(invoke.calls[0]!.cmd).toBe("build_erc20_token_stream_permission");
+    // Step 1: periodic spec built via the Rust builder with snake_case args.
+    expect(invoke.calls[0]!.cmd).toBe("build_erc20_token_periodic_permission");
     expect(invoke.calls[0]!.args).toEqual({
       args: {
         session_account: opts.sessionAccount,
         token_address: opts.tokenAddress,
-        amount_per_second_hex: "0x1",
-        max_amount_hex: "0xf4240",
-        expiry_secs: 86_400,
+        period_amount_hex: "0x989680",
+        period_duration_secs: 86_400,
+        expiry_secs: 604_800,
         justification: "Frost session",
       },
     });
@@ -58,7 +58,7 @@ describe("requestMetaMaskGrant", () => {
 
   it("threads an optional chain id override into the Rust builder", async () => {
     const invoke = fakeInvoke({
-      build_erc20_token_stream_permission: [],
+      build_erc20_token_periodic_permission: [],
       wallet_bridge_perform: { challenge: "c", body: { challenge: "c", granted: {} } },
     });
     await requestMetaMaskGrant({ ...opts, chainIdHex: "0x2105" }, invoke);
@@ -67,7 +67,7 @@ describe("requestMetaMaskGrant", () => {
 
   it("throws when the user rejected / the bridge reported an error", async () => {
     const invoke = fakeInvoke({
-      build_erc20_token_stream_permission: [],
+      build_erc20_token_periodic_permission: [],
       wallet_bridge_perform: { challenge: "c", body: { challenge: "c", error: "user rejected" } },
     });
     await expect(requestMetaMaskGrant(opts, invoke)).rejects.toThrow(/MetaMask grant failed: user rejected/);
@@ -75,7 +75,7 @@ describe("requestMetaMaskGrant", () => {
 
   it("throws when no permission came back", async () => {
     const invoke = fakeInvoke({
-      build_erc20_token_stream_permission: [],
+      build_erc20_token_periodic_permission: [],
       wallet_bridge_perform: { challenge: "c", body: { challenge: "c" } },
     });
     await expect(requestMetaMaskGrant(opts, invoke)).rejects.toThrow(/no permission/);

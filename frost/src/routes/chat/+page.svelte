@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
   import { Button } from "$lib/components/ui/button";
+  import * as Tooltip from "$lib/components/ui/tooltip";
   import { Textarea } from "$lib/components/ui/textarea";
   import GradientBackdrop from "$lib/components/brand/GradientBackdrop.svelte";
   import Logo from "$lib/components/brand/Logo.svelte";
@@ -11,8 +12,19 @@
   import { MASTER_AGENT_PROMPT, masterRuntimeContext } from "$lib/agent/master-prompt";
   import { runMasterTurn, type MasterStep } from "$lib/agent/master-loop";
   import { runMasterTool, readToolNames, toolCatalog, type ToolContext } from "$lib/agent/master-tools";
+  import {
+    connectMetaMaskAuthority,
+    resolveRelayerTarget,
+    recordGrant,
+    granterAddressOf,
+    GRANT_TOKEN,
+    GRANT_PERIOD_SECS,
+    GRANT_EXPIRY_SECS,
+  } from "$lib/wallet-connect";
+  import { profile } from "$lib/stores/profile.svelte";
   import { Compiler, renderSpec } from "@frost/agent/browser";
   import type { CompiledSpec, CompileResult } from "@frost/agent/browser";
+  import { serializeSpec, reviveSpec } from "$lib/agent/spec-serde";
   import { FALLBACK_BASE_RPC_URL } from "$lib/flags";
   import { veniceKill } from "$lib/stores/venice.svelte";
   import SendHorizontal from "@lucide/svelte/icons/send-horizontal";
@@ -32,18 +44,42 @@
   let readySpec = $state<CompiledSpec | undefined>(undefined);
   let readyResult = $state<CompileResult | undefined>(undefined);
   let readyWorkflow = $state<string | undefined>(undefined);
+  // The most recent COMPILED workflow (ready-to-sign or not), so the run hand-off always
+  // carries the agent's real workflow sentence + its compiled spec — never a raw user
+  // message like "check if there are any missing fields" that would recompile to garbage.
+  let lastCompiled = $state<{ workflow: string; result: CompileResult } | undefined>(undefined);
 
   const messages = $derived(chats.current?.messages ?? []);
   const started = $derived(messages.length > 0);
-  const lastUserWorkflow = $derived(
-    [...messages].reverse().find((m) => m.role === "user")?.content,
-  );
+  // What "Run on Runtime Manager" hands off. Priority: an in-memory compiled spec (run
+  // directly, no recompile) → the latest non-escalated compile → the PERSISTED compiled
+  // workflow sentence (survives reload; runtime recompiles it). NEVER a raw user message.
+  type Runnable =
+    | { workflow: string; spec: CompiledSpec; result: CompileResult }
+    | { workflow: string; spec: CompiledSpec }
+    | { workflow: string };
+  const runnable = $derived.by<Runnable | undefined>(() => {
+    if (readySpec && readyResult)
+      return { workflow: readyWorkflow ?? lastCompiled?.workflow ?? "", spec: readySpec, result: readyResult };
+    if (lastCompiled && !lastCompiled.result.escalateToHITL)
+      return { workflow: lastCompiled.workflow, spec: lastCompiled.result.spec, result: lastCompiled.result };
+    // After a reload (in-memory state gone) revive the EXACT persisted spec so the run
+    // keeps the comms template; fall back to the sentence (runtime recompiles) only if
+    // the spec couldn't be revived.
+    const conv = chats.current;
+    if (conv?.lastSpec) {
+      const spec = reviveSpec(conv.lastSpec);
+      if (spec) return { workflow: conv.lastWorkflow ?? spec.description, spec };
+    }
+    return conv?.lastWorkflow ? { workflow: conv.lastWorkflow } : undefined;
+  });
 
   function resetTurnState() {
     answers = {};
     readySpec = undefined;
     readyResult = undefined;
     readyWorkflow = undefined;
+    lastCompiled = undefined;
   }
   function newChat() {
     chats.newChat();
@@ -58,14 +94,14 @@
 
   /** Render a read-tool step as a compact chat message. */
   function formatTool(step: Extract<MasterStep, { kind: "tool" }>): string {
-    return `${step.ok ? "🔧" : "⚠️"} ${step.tool}: ${step.summary}`;
+    return step.ok ? `${step.tool}: ${step.summary}` : `${step.tool} failed: ${step.summary}`;
   }
 
   /** Render a compile tool step as a chat message (byte-tied review + warnings). */
   function formatCompiled(step: Extract<MasterStep, { kind: "compiled" }>): string {
     const { result, review } = step;
     if (result.escalateToHITL) {
-      return `⚠️ I couldn't compile this safely: ${result.hitlReason ?? "the request was unclear or too broad"}.`;
+      return `I couldn't compile this safely: ${result.hitlReason ?? "the request was unclear or too broad"}.`;
     }
     const lines = ["Compiled — here's what you'd authorize:", ...review.map((r) => "• " + r)];
     if (result.warnings.length > 0) {
@@ -81,7 +117,7 @@
     chats.append({ role: "user", content: text });
     pending = true;
     try {
-      const { transport, model } = buildTransport();
+      const { transport, model } = buildTransport({ source: "Workflow chat" });
       const compiler = new Compiler({ transport, model });
       const history = (chats.current?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
       const system =
@@ -94,6 +130,39 @@
         veniceDisabled: veniceKill.disabled,
         fallbackRpcUrl: FALLBACK_BASE_RPC_URL,
         chainId: 8453,
+        // request_authority: drive a NEW scoped ERC-7715 USDC grant via MetaMask, store it as the
+        // active grant. Lets the agent ask the user for more/extra budget mid-conversation (e.g. to
+        // fund a swap beyond the onboarding grant) — the "agent proposes, user disposes" pattern.
+        requestAuthority: async ({ amountBaseUnits, periodSecs, justification }) => {
+          try {
+            const target = await resolveRelayerTarget();
+            const auth = await connectMetaMaskAuthority({
+              sessionAccount: target,
+              tokenAddress: GRANT_TOKEN,
+              periodAmount: amountBaseUnits,
+              periodSecs: periodSecs || GRANT_PERIOD_SECS,
+              expirySecs: GRANT_EXPIRY_SECS,
+              nowUnix: Math.floor(Date.now() / 1000),
+              justification,
+            });
+            config.update({
+              sessionAccount: auth.sessionAccount,
+              metaMaskGrant: JSON.stringify(auth.granted),
+              grantTokenAddress: auth.tokenAddress,
+              grantMaxAmount: auth.periodAmount,
+              grantExpiryUnix: auth.expiryUnix,
+            });
+            recordGrant(auth);
+            // Record the granter as the user's wallet so the runtime's relayer executor
+            // can redeem this grant on-chain (a real USDC settlement under the authority).
+            const granter = granterAddressOf(auth.granted, auth.sessionAccount);
+            if (granter) profile.update({ walletAddress: granter });
+            const per = periodSecs === 604_800 ? "week" : "day";
+            return { ok: true, detail: `${Number(amountBaseUnits) / 1_000_000} USDC / ${per}` };
+          } catch (e) {
+            return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+          }
+        },
       };
       const res = await runMasterTurn(system, history, answers, {
         infer: async (msgs) =>
@@ -113,6 +182,16 @@
           chats.append({ role: "assistant", content: formatTool(step) });
         }
       }
+      // Track the latest compiled step (ready or not) for a safe run hand-off, and
+      // PERSIST its workflow sentence so the run button survives an app reload.
+      const compiledStep = [...res.steps].reverse().find((s) => s.kind === "compiled");
+      if (compiledStep && compiledStep.kind === "compiled") {
+        lastCompiled = { workflow: compiledStep.workflow, result: compiledStep.result };
+        // Persist the workflow sentence AND the serialized spec so a run after reload
+        // uses the exact reviewed spec (comms template included), not a recompile.
+        if (!compiledStep.result.escalateToHITL)
+          chats.setWorkflow(compiledStep.workflow, serializeSpec(compiledStep.result.spec));
+      }
       if (res.ready) {
         readySpec = res.ready.spec;
         readyResult = res.ready.result;
@@ -131,7 +210,7 @@
     const status = (e as { status?: number })?.status;
     const body = (e as { body?: string })?.body;
     const base = e instanceof Error ? e.message : String(e);
-    const lines = [`⚠️ Inference failed: ${base}`];
+    const lines = [`Inference failed: ${base}`];
     if (body) lines.push(body.length > 300 ? body.slice(0, 300) + "…" : body);
     if (status === 429) {
       lines.push("Rate limited — wait a moment and retry (the provider's free tier is throttling).");
@@ -141,17 +220,19 @@
   }
 
   function runOnRuntime() {
-    if (readySpec && readyResult) {
+    // Hand off a COMPILED spec when we have one (runtime runs it directly); else the
+    // PERSISTED workflow sentence (runtime recompiles it). Never a raw user message — a
+    // meta-message ("check if there are any missing fields") escalates as ambiguous.
+    if (!runnable) return;
+    if ("spec" in runnable) {
       handoff.set({
-        workflow: readyWorkflow ?? lastUserWorkflow ?? "",
-        spec: readySpec,
-        compileResult: readyResult,
+        workflow: runnable.workflow,
+        spec: runnable.spec,
+        ...("result" in runnable ? { compileResult: runnable.result } : {}),
         answers,
       });
-    } else if (lastUserWorkflow) {
-      handoff.set({ workflow: lastUserWorkflow, answers });
     } else {
-      return;
+      handoff.set({ workflow: runnable.workflow, answers });
     }
     goto("/runtime");
   }
@@ -193,9 +274,16 @@
 
   <!-- Control bar: history toggle on the right, hovering over the gradient -->
   <div class="relative z-30 flex items-center justify-end gap-1 px-3 py-2">
-    <Button variant="ghost" size="icon" onclick={() => (showHistory = !showHistory)} aria-label="Toggle history" title="Chat history">
-      <PanelRight class="size-4" />
-    </Button>
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          <Button {...props} variant="ghost" size="icon" onclick={() => (showHistory = !showHistory)} aria-label="Toggle history" title="Chat history">
+            <PanelRight class="size-4" />
+          </Button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="bottom">Chat history</Tooltip.Content>
+    </Tooltip.Root>
   </div>
 
   <!-- Floating translucent history panel (hovers over the gradient, right side) -->
@@ -222,14 +310,22 @@
               <span class="block truncate">{c.title}</span>
               <span class="block text-[10px] text-muted-foreground">{relTime(c.createdAt)}</span>
             </button>
-            <button
-              type="button"
-              class="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
-              onclick={() => chats.remove(c.id)}
-              aria-label="Delete chat"
-            >
-              <Trash2 class="size-3.5" />
-            </button>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    type="button"
+                    class="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
+                    onclick={() => chats.remove(c.id)}
+                    aria-label="Delete chat"
+                  >
+                    <Trash2 class="size-3.5" />
+                  </button>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content side="bottom">Delete chat</Tooltip.Content>
+            </Tooltip.Root>
           </div>
         {/each}
       </div>
@@ -287,10 +383,10 @@
 
         <div class="p-3">
           <div class="mx-auto max-w-2xl">
-            {#if lastUserWorkflow}
+            {#if runnable}
               <div class="mb-2 flex justify-center">
                 <Button variant={readySpec ? "default" : "secondary"} size="sm" onclick={runOnRuntime}>
-                  <Play class="size-3.5" /> {readySpec ? "Run compiled workflow" : "Run on Runtime Manager"}
+                  <Play class="size-3.5" /> {readySpec ? "Run compiled workflow" : "Run latest draft"}
                 </Button>
               </div>
             {/if}

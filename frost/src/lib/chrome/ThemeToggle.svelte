@@ -1,22 +1,30 @@
 <script lang="ts">
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { theme } from '$lib/stores/theme.svelte';
 </script>
 
-<button
-	type="button"
-	class="chrome-btn"
-	aria-label="Toggle theme"
-	title={theme.value === 'dark' ? 'Switch to light' : 'Switch to dark'}
-	onclick={() => theme.toggle()}
->
-	{#if theme.value === 'dark'}
-		<Sun size={14} strokeWidth={2} />
-	{:else}
-		<Moon size={14} strokeWidth={2} />
-	{/if}
-</button>
+<Tooltip.Root>
+	<Tooltip.Trigger>
+		{#snippet child({ props })}
+			<button
+				{...props}
+				type="button"
+				class="chrome-btn"
+				aria-label="Toggle theme"
+				onclick={() => theme.toggle()}
+			>
+				{#if theme.value === 'dark'}
+					<Sun size={14} strokeWidth={2} />
+				{:else}
+					<Moon size={14} strokeWidth={2} />
+				{/if}
+			</button>
+		{/snippet}
+	</Tooltip.Trigger>
+	<Tooltip.Content side="bottom">Toggle theme</Tooltip.Content>
+</Tooltip.Root>
 
 <style>
 	.chrome-btn {

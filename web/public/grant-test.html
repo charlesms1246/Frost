@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Frost — local grant test launcher</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 720px; margin: 48px auto; padding: 0 20px; color: #111; }
+    code { background: #f2f2f2; padding: 1px 5px; border-radius: 4px; }
+    .row { margin: 14px 0; }
+    label { display: inline-block; min-width: 130px; }
+    input { font: inherit; padding: 4px 6px; width: 460px; max-width: 100%; }
+    button { font: inherit; padding: 8px 18px; cursor: pointer; margin-top: 8px; }
+    pre { background: #0b0b0b; color: #d6d6d6; padding: 12px; border-radius: 6px; overflow:auto; white-space: pre-wrap; word-break: break-all; }
+    .hint { color: #555; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Frost — local grant test</h1>
+  <p class="hint">
+    Builds a valid ERC-7715 <code>erc20-token-stream</code> spec in-browser and opens the grant page —
+    so there is no long URL to copy/paste (the query string was getting corrupted by hand). Open
+    DevTools console before clicking to see the <code>[grant]</code> payload log.
+  </p>
+
+  <div class="row"><label>permission type</label>
+    <select id="ptype" style="font:inherit;padding:4px 6px">
+      <option value="erc20-token-periodic" selected>erc20-token-periodic (docs default)</option>
+      <option value="erc20-token-stream">erc20-token-stream</option>
+    </select>
+  </div>
+  <div class="row"><label>token (USDC)</label><input id="token" value="0x036CbD53842c5426634e7929541eC2318f3dCF7e" /></div>
+  <div class="row"><label>delegate (to)</label><input id="to" value="0x363b64Ab6299195E7EF06Ba3E3DBF37012522D0C" /></div>
+  <div class="row"><label>callback port</label><input id="port" value="9999" style="width:120px" /></div>
+
+  <button id="go">Open grant page →</button>
+
+  <div class="row"><span class="hint">resolved link (auto-encoded — uncorruptible):</span></div>
+  <pre id="link"></pre>
+
+  <script>
+    function buildUrl() {
+      const now = Math.floor(Date.now() / 1000);
+      const type = document.getElementById("ptype").value;
+      const token = document.getElementById("token").value.trim();
+      // Periodic (every official MetaMask example): 1 USDC (0xf4240) per day (86400s).
+      // Stream: amountPerSecond + maxAmount + initialAmount.
+      const data = type === "erc20-token-periodic"
+        ? {
+            tokenAddress: token,
+            periodAmount: "0xf4240",   // 1,000,000 base units = 1 USDC
+            periodDuration: 86400,     // 1 day
+            startTime: now,
+            justification: "Frost local grant test — 1 USDC/day"
+          }
+        : {
+            tokenAddress: token,
+            amountPerSecond: "0x1",
+            maxAmount: "0xf4240",
+            initialAmount: "0xf4240",
+            startTime: now,
+            justification: "Frost local grant test"
+          };
+      const spec = [{
+        chainId: "0x14a34", // Base Sepolia (84532)
+        to: document.getElementById("to").value.trim(),
+        permission: { type, isAdjustmentAllowed: true, data },
+        rules: [{ type: "expiry", data: { timestamp: now + 604800 } }]
+      }];
+      const port = encodeURIComponent(document.getElementById("port").value.trim() || "9999");
+      return "/connect/grant-permissions?challenge=localtest&port=" + port +
+             "&params=" + encodeURIComponent(JSON.stringify(spec));
+    }
+    function refresh() { document.getElementById("link").textContent = location.origin + buildUrl(); }
+    document.querySelectorAll("input").forEach((el) => el.addEventListener("input", refresh));
+    document.getElementById("ptype").addEventListener("change", refresh);
+    document.getElementById("go").addEventListener("click", () => { location.href = buildUrl(); });
+    refresh();
+  </script>
+</body>
+</html>

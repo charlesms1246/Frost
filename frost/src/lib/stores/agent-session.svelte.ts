@@ -1,4 +1,11 @@
 import type { SessionEvent, RouteInfo, HitlApprovalRequest, ReceiptInput } from "@frost/agent/browser";
+import { invoke } from "@tauri-apps/api/core";
+
+/** Best-effort: print a frontend log line to the `tauri dev` CLI (no-op outside Tauri). */
+function cliLog(level: "error" | "warn" | "info", message: string): void {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+  void invoke("log_line", { level, message }).catch(() => {});
+}
 
 /**
  * The live dashboard store: consumes the @frost/agent {@link SessionEvent} spine and
@@ -38,6 +45,32 @@ export interface ActivityLine {
   text: string;
 }
 
+/** One inference call's usage, for the runtime Usage tab. */
+export interface UsageRecord {
+  t: number;
+  /** Display provider name (Venice paid path vs the OpenRouter/Groq fallback). */
+  provider: string;
+  model?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+}
+
+/** Per provider+model aggregate row shown in the Usage table. */
+export interface UsageRow {
+  provider: string;
+  model: string;
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  /** True when at least one call in this row reported token usage. */
+  hasTokens: boolean;
+  hasCost: boolean;
+}
+
 export interface MasterNode {
   description: string;
   rootMandateId?: string;
@@ -53,6 +86,8 @@ export class AgentSessionStore {
   children = $state<AgentNode[]>([]);
   activity = $state<ActivityLine[]>([]);
   routes = $state<{ venice: number; openrouter: number }>({ venice: 0, openrouter: 0 });
+  /** Every inference call's provider/model/token/cost usage (for the Usage tab). */
+  inferenceUsage = $state<UsageRecord[]>([]);
   escalation = $state<string | undefined>(undefined);
   authority = $state<{ subMandateCount: number; aggregateSubMandateBudget: bigint; bucketAvailable: number } | undefined>(undefined);
   errorText = $state<string | undefined>(undefined);
@@ -97,6 +132,50 @@ export class AgentSessionStore {
   }
 
   /**
+   * Inference usage aggregated per provider+model — the rows of the Usage tab's
+   * inference table. Tokens/cost sum across calls; flags note when the API actually
+   * emitted them (so the UI shows "—" rather than a misleading 0).
+   */
+  get usageByModel(): UsageRow[] {
+    const rows = new Map<string, UsageRow>();
+    for (const r of this.inferenceUsage) {
+      const model = r.model ?? "(unknown)";
+      const key = `${r.provider}|${model}`;
+      let row = rows.get(key);
+      if (!row) {
+        row = { provider: r.provider, model, requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, hasTokens: false, hasCost: false };
+        rows.set(key, row);
+      }
+      row.requests += 1;
+      if (r.promptTokens !== undefined) { row.promptTokens += r.promptTokens; row.hasTokens = true; }
+      if (r.completionTokens !== undefined) { row.completionTokens += r.completionTokens; row.hasTokens = true; }
+      if (r.totalTokens !== undefined) { row.totalTokens += r.totalTokens; row.hasTokens = true; }
+      if (r.costUsd !== undefined) { row.costUsd += r.costUsd; row.hasCost = true; }
+    }
+    return [...rows.values()];
+  }
+
+  /**
+   * Request counts per agent: the master (inference calls) plus each spawned
+   * sub-agent (one request per run). The rows of the Usage tab's agent table.
+   */
+  get requestsByAgent(): { agent: string; behavior?: string; requests: number; status: string }[] {
+    const out: { agent: string; behavior?: string; requests: number; status: string }[] = [
+      { agent: "Master agent", requests: this.inferenceCalls, status: this.master.status },
+    ];
+    for (const c of this.children) {
+      const row: { agent: string; behavior?: string; requests: number; status: string } = {
+        agent: c.role,
+        requests: c.status === "planned" ? 0 : 1,
+        status: c.status,
+      };
+      if (c.behavior) row.behavior = c.behavior;
+      out.push(row);
+    }
+    return out;
+  }
+
+  /**
    * The winning route across all pricer sub-agents that reported a quote — the
    * demo's "spawn N pricers, pick the best rate" payoff. Highest USDC out wins
    * (a SELL of WETH → USDC). Undefined until at least one pricer has a quote.
@@ -120,6 +199,7 @@ export class AgentSessionStore {
     this.children = [];
     this.activity = [];
     this.routes = { venice: 0, openrouter: 0 };
+    this.inferenceUsage = [];
     this.escalation = undefined;
     this.authority = undefined;
     this.errorText = undefined;
@@ -237,6 +317,14 @@ export class AgentSessionStore {
 
   private log(kind: ActivityLine["kind"], text: string): void {
     this.activity.push({ t: Date.now(), kind, text });
+    // Mirror to the console so the activity stream is also visible in the CLI
+    // (Tauri dev forwards the webview console to the `tauri dev` terminal).
+    const line = `[frost:${kind}] ${text}`;
+    if (kind === "error") console.error(line);
+    else if (kind === "warn") console.warn(line);
+    else console.log(line);
+    // Also forward to the Rust CLI logger (visible in the `tauri dev` terminal).
+    cliLog(kind === "error" ? "error" : kind === "warn" ? "warn" : "info", text);
   }
 
   private node(mandateId?: string, index?: number): AgentNode | undefined {
@@ -310,7 +398,7 @@ export class AgentSessionStore {
           if (e.detail) n.detail = e.detail;
           if (e.quote) n.quote = { label: e.quote.label, amountOutUsdc: BigInt(e.quote.amountOutUsdc) };
         }
-        this.log(e.ran ? "run" : "warn", `${e.role} ${e.ran ? "✓" : "✗"} ${e.detail ?? ""}`.trim());
+        this.log(e.ran ? "run" : "warn", `${e.role} ${e.ran ? "done" : "failed"}${e.detail ? " — " + e.detail : ""}`);
         break;
       }
       case "escalated": {
@@ -336,6 +424,14 @@ export class AgentSessionStore {
     if (info.provider === "primary") this.routes.venice += 1;
     else this.routes.openrouter += 1;
     const label = info.provider === "primary" ? "Venice (paid/x402)" : "OpenRouter";
+    // Record the call's usage for the Usage tab (tokens/cost only when the API emits them).
+    const rec: UsageRecord = { t: Date.now(), provider: label };
+    if (info.model) rec.model = info.model;
+    if (info.usage?.promptTokens !== undefined) rec.promptTokens = info.usage.promptTokens;
+    if (info.usage?.completionTokens !== undefined) rec.completionTokens = info.usage.completionTokens;
+    if (info.usage?.totalTokens !== undefined) rec.totalTokens = info.usage.totalTokens;
+    if (info.usage?.costUsd !== undefined) rec.costUsd = info.usage.costUsd;
+    this.inferenceUsage.push(rec);
     const why =
       info.reason === "budget-exhausted"
         ? " — Venice budget spent, switched"
@@ -347,10 +443,42 @@ export class AgentSessionStore {
     this.log("route", `Inference → ${label}${why} [${info.primaryCallsUsed}/${info.primaryCallBudget} paid]`);
   }
 
-  markError(message: string): void {
+  /**
+   * Record a fatal cycle error. Accepts a label and the raw thrown value so we can
+   * surface the real message + cause + stack — far more useful than a bare "error".
+   * The full error object is also dumped to the console (visible in the CLI under
+   * `tauri dev`).
+   */
+  markError(message: string, raw?: unknown): void {
     this.phase = "error";
-    this.errorText = message;
+    const detail = describeError(raw);
+    const full = detail && detail !== message ? `${message}: ${detail}` : message;
+    this.errorText = full;
     this.master.status = "failed";
-    this.log("error", message);
+    this.log("error", full);
+    if (raw !== undefined) console.error("[frost:error] raw:", raw);
+  }
+}
+
+/** Extract a human message from any thrown value, including `cause` + first stack frame. */
+function describeError(e: unknown): string {
+  if (e === undefined || e === null) return "";
+  if (typeof e === "string") return e;
+  if (e instanceof Error) {
+    const parts = [e.message || e.name];
+    const cause = (e as { cause?: unknown }).cause;
+    if (cause) parts.push(`(cause: ${describeError(cause)})`);
+    const frame = e.stack?.split("\n")[1]?.trim();
+    if (frame) parts.push(frame);
+    return parts.filter(Boolean).join(" ");
+  }
+  // viem / fetch style error objects often carry shortMessage / status / body.
+  const o = e as Record<string, unknown>;
+  const m = o.shortMessage ?? o.message ?? o.error ?? o.body ?? o.status;
+  if (m !== undefined) return String(m);
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
   }
 }

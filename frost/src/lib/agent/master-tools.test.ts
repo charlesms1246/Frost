@@ -32,6 +32,30 @@ describe("master-tools", () => {
     expect(toolCatalog()).toContain("price_quote:");
   });
 
+  it("request_authority converts USDC/period to base units and drives the grant seam", async () => {
+    const seen: { amountBaseUnits: bigint; periodSecs: number; justification: string }[] = [];
+    const requestAuthority = async (req: { amountBaseUnits: bigint; periodSecs: number; justification: string }) => {
+      seen.push(req);
+      return { ok: true, detail: "granted" };
+    };
+    const r = await runMasterTool("request_authority", { amount: 25, period: "week" }, ctx({ requestAuthority }));
+    expect(r.ok).toBe(true);
+    expect(seen[0]).toEqual({ amountBaseUnits: 25_000_000n, periodSecs: 604_800, justification: expect.stringContaining("25") });
+    expect(r.observation).toMatch(/approved a new ERC-7715 permission/i);
+  });
+
+  it("request_authority defaults to per-day and reports failures", async () => {
+    const requestAuthority = async () => ({ ok: false, detail: "user rejected" });
+    const r = await runMasterTool("request_authority", { amount: 10 }, ctx({ requestAuthority }));
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/user rejected/);
+  });
+
+  it("request_authority rejects a missing/invalid amount and an absent wallet seam", async () => {
+    expect((await runMasterTool("request_authority", { amount: 0 }, ctx({ requestAuthority: async () => ({ ok: true, detail: "" }) }))).ok).toBe(false);
+    expect((await runMasterTool("request_authority", { amount: 5 }, ctx())).ok).toBe(false); // no seam → unavailable
+  });
+
   it("current_time needs no network and returns the unix time", async () => {
     const r = await runMasterTool("current_time", {}, ctx());
     expect(r.ok).toBe(true);

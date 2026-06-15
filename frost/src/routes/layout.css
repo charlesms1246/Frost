@@ -61,13 +61,14 @@
 .dark {
   --background: oklch(0.141 0.005 285.823);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
+  --card: oklch(0.21 0.006 285.885 / 0.78);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
+  --popover: oklch(0.21 0.006 285.885 / 0.86);
   --popover-foreground: oklch(0.985 0 0);
 
-  /* theme: Blue — dark-mode primary */
-  --primary: oklch(0.424 0.199 265.638);
+  /* theme: Blue — dark-mode primary. Brightened so primary-tinted icons/buttons stay
+     identifiable on the translucent frosted-glass surfaces (was 0.424 — too dark). */
+  --primary: oklch(0.58 0.198 264.6);
   --primary-foreground: oklch(0.97 0.014 254.604);
   --ring: oklch(0.552 0.016 285.938);
 
@@ -78,7 +79,7 @@
   --accent: oklch(0.274 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
+  --border: oklch(1 0 0 / 12%);
   --input: oklch(1 0 0 / 15%);
 
   --chart-1: oklch(0.865 0.127 207.078);
@@ -152,5 +153,52 @@
   }
 	html {
 		@apply font-sans;
+  }
+
+  /* Number inputs: drop the native spinner chrome — it doesn't match the design system. */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
+  /* Autofill: keep the field's own surface/text instead of the browser's yellow/blue. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-text-fill-color: var(--foreground);
+    -webkit-box-shadow: 0 0 0 1000px color-mix(in oklab, var(--input) 30%, var(--background)) inset;
+    caret-color: var(--foreground);
+    transition: background-color 9999s ease-out 0s;
+  }
+
+  /* Scrollbars matched to the design tokens (Firefox + WebKit/Chromium). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--foreground) 18%, transparent);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--foreground) 32%, transparent);
+    background-clip: padding-box;
   }
 }

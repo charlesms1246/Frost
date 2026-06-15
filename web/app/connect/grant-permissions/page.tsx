@@ -15,6 +15,7 @@ import { useSearchParams } from "next/navigation";
 import { createPublicClient, createWalletClient, custom, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import { erc7715ProviderActions } from "@metamask/smart-accounts-kit/actions";
+import { getSmartAccountsEnvironment } from "@metamask/smart-accounts-kit";
 import { detectMetaMask, type MMDetection } from "../_lib/detect-mm";
 import ConnectShell from "../_components/ConnectShell";
 
@@ -92,27 +93,76 @@ function parseSpec(rawParams: string): PermissionRequest[] {
  * installed MetaMask gator expects — the raw `provider.request` path was being
  * rejected with "cannot sign delegations for internal accounts".
  */
+// Ensure a value is a lowercase 0x-prefixed hex address. A bare 40-char hex (no 0x) is the
+// one input that trips the kit's "tokenAddress is not a valid hex value" validator.
+function normalizeAddress(a: string): string {
+  const hex = /^0x/i.test(a) ? a : `0x${a}`;
+  return hex.toLowerCase();
+}
+
+// The ERC-7715 grant response carries bigint fields (echoed amounts). A plain JSON.stringify
+// of it throws "Do not know how to serialize a BigInt", so every serialization (callback POST,
+// logging) routes through this bigint→hex replacer.
+function jsonBigIntSafe(obj: unknown): string {
+  return JSON.stringify(obj, (_k, v) => (typeof v === "bigint" ? `0x${v.toString(16)}` : v));
+}
+
 function specToKitRequest(req: PermissionRequest): Record<string, unknown> {
   const expiry = req.rules.find((r): r is ExpiryRule => r.type === "expiry");
-  const d = req.permission.data as Partial<Erc20StreamData>;
-  const data: Record<string, unknown> = {
-    amountPerSecond: BigInt(d.amountPerSecond ?? "0x0"),
-    maxAmount: BigInt(d.maxAmount ?? "0x0"),
-    initialAmount: BigInt(d.initialAmount ?? "0x0"),
-  };
-  if (d.tokenAddress) data.tokenAddress = d.tokenAddress;
-  if (typeof d.startTime === "number") data.startTime = d.startTime;
-  if (d.justification) data.justification = d.justification;
+  const raw = req.permission.data as Record<string, unknown>;
+  const type = req.permission.type;
+  const data: Record<string, unknown> = {};
+
+  // Periodic types take periodAmount + periodDuration; stream types take
+  // amountPerSecond + maxAmount + initialAmount. Every official MetaMask example uses
+  // `erc20-token-periodic`, so we now support both shapes (this experiment tests whether
+  // the installed wallet accepts periodic where it rejected stream).
+  if (type === "erc20-token-periodic" || type === "native-token-periodic") {
+    data.periodAmount = BigInt((raw.periodAmount as string) ?? "0x0");
+    data.periodDuration = Number(raw.periodDuration ?? 0);
+  } else {
+    data.amountPerSecond = BigInt((raw.amountPerSecond as string) ?? "0x0");
+    data.maxAmount = BigInt((raw.maxAmount as string) ?? "0x0");
+    data.initialAmount = BigInt((raw.initialAmount as string) ?? "0x0");
+  }
+  // Normalize the token address: the kit's toHexOrThrow rejects a string that isn't
+  // 0x-prefixed hex with "tokenAddress is not a valid hex value", so guarantee the 0x
+  // prefix (a bare 40-char hex slips through otherwise) and lowercase it (case-insensitive
+  // on-chain; sidesteps any downstream case-strict validator).
+  if (raw.tokenAddress) data.tokenAddress = normalizeAddress(raw.tokenAddress as string);
+  if (typeof raw.startTime === "number") data.startTime = raw.startTime;
+  if (raw.justification) data.justification = raw.justification;
   return {
     chainId: Number(req.chainId),
     to: req.to,
     ...(expiry ? { expiry: expiry.data.timestamp } : {}),
     permission: {
-      type: req.permission.type,
+      type,
       isAdjustmentAllowed: req.permission.isAdjustmentAllowed,
       data,
     },
   };
+}
+
+// EIP-7702 sets an account's code to a "designator": 0xef0100 ‖ <20-byte impl address>.
+// A non-empty getCode only proves the account has SOME code — NOT that it's a MetaMask
+// gator smart account. requestExecutionPermissions can only sign an ERC-7710 delegation
+// when the code delegates to the framework's EIP7702StatelessDeleGatorImpl; against any
+// other target (or a plain EOA) MetaMask refuses with "External signature requests cannot
+// sign delegations for internal accounts". Pull the impl the account actually points at so
+// we can tell the user precisely WHY a grant was refused instead of echoing the raw string.
+function delegatedImpl(code: string | undefined): `0x${string}` | undefined {
+  if (!code || !code.toLowerCase().startsWith("0xef0100") || code.length < 48) return undefined;
+  return `0x${code.slice(8, 48)}` as `0x${string}`;
+}
+
+function expectedGatorImpl(): `0x${string}` | undefined {
+  try {
+    return getSmartAccountsEnvironment(baseSepolia.id).implementations
+      .EIP7702StatelessDeleGatorImpl as `0x${string}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function shortHex(s: string, head = 6, tail = 4): string {
@@ -136,8 +186,11 @@ function chainName(hex: string): string {
 function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: number | null }) {
   const expiry = req.rules.find((r): r is ExpiryRule => r.type === "expiry");
   const expirySecs = expiry && nowSecs !== null ? expiry.data.timestamp - nowSecs : null;
-  const isErc20 = req.permission.type === "erc20-token-stream";
-  const data = req.permission.data as Partial<Erc20StreamData>;
+  const isErc20 = req.permission.type.startsWith("erc20-");
+  const data = req.permission.data as Partial<Erc20StreamData> & {
+    periodAmount?: string;
+    periodDuration?: number;
+  };
 
   return (
     <div className="connect-card">
@@ -145,6 +198,8 @@ function PermissionPreview({ req, nowSecs }: { req: PermissionRequest; nowSecs: 
       <Row k="chain" v={chainName(req.chainId)} />
       <Row k="delegate" v={shortHex(req.to)} mono />
       {isErc20 && data.tokenAddress && <Row k="token" v={shortHex(data.tokenAddress)} mono />}
+      {data.periodAmount && <Row k="per period" v={data.periodAmount} mono />}
+      {data.periodDuration && <Row k="period" v={formatDuration(Number(data.periodDuration))} />}
       {data.amountPerSecond && <Row k="rate" v={`${data.amountPerSecond} / sec`} mono />}
       {data.maxAmount && <Row k="max total" v={data.maxAmount} mono />}
       {data.initialAmount && data.initialAmount !== "0x0" && (
@@ -245,6 +300,10 @@ function GrantInner() {
     detection: Extract<MMDetection, { kind: "flask-ok" }>,
   ) {
     setState({ kind: "requesting", spec });
+    // On-chain account diagnosis, filled in during the "checking" phase below and reused in
+    // the catch so the "internal account" rejection reports the ACTUAL reason (no code vs.
+    // wrong impl vs. correct gator) rather than the cryptic MetaMask string alone.
+    let accountDiag = "";
     try {
       const provider = detection.detail.provider;
       const accounts = (await provider.request({ method: "eth_requestAccounts" })) as `0x${string}`[];
@@ -285,32 +344,90 @@ function GrantInner() {
       // to switch to a Smart Account in MetaMask (the only reliable upgrade path).
       setState({ kind: "checking", spec });
       const code = await publicClient.getCode({ address: account }).catch(() => undefined);
+      const impl = delegatedImpl(code);
+      const gator = expectedGatorImpl();
+      const isGator = !!impl && !!gator && impl.toLowerCase() === gator.toLowerCase();
+      accountDiag =
+        !code || code === "0x"
+          ? "this account has no code (it's a plain EOA, not a Smart Account)"
+          : isGator
+            ? `this account delegates to the expected MetaMask gator (${gator})`
+            : `this account's 7702 code delegates to ${impl ?? "an unrecognized target"}, ` +
+              `not the MetaMask gator implementation${gator ? ` (${gator})` : ""}`;
+      // Ground-truth diagnosis in the console: the connected account, its on-chain code, the
+      // impl its 7702 designator points at, the expected gator, and whether they match. If
+      // MetaMask still refuses with "internal accounts" while isGator=true, the limitation is
+      // MetaMask-side (the account isn't registered/selected as a signable smart account).
+      console.log(
+        "[grant] account diagnosis:",
+        JSON.stringify({ account, code, impl, expectedGator: gator, isGator }),
+      );
+
+      // EXPERIMENT (ERC-7715 from a non-upgraded account): we NO LONGER hard-block a plain EOA
+      // or a non-gator account. Hypothesis: MetaMask's Advanced Permissions (ERC-7715) flow is
+      // meant to manage smart-account/delegation creation ITSELF, and forcing a 7702 "Switch to
+      // smart account" first put the account into the exact state MetaMask said "isn't supported
+      // at this stage". So we now ALWAYS attempt requestExecutionPermissions and let MetaMask's
+      // grant UI decide; the catch reports the precise on-chain account state if it still refuses.
+      // (Was: a hard error that told plain EOAs to switch to a Smart Account before granting.)
       if (!code || code === "0x") {
-        setState({
-          kind: "error",
-          message:
-            "This MetaMask account isn't a Smart Account yet. In MetaMask, switch this " +
-            "account to a Smart Account (account menu → “Switch to smart account”), " +
-            "then retry. Frost can't upgrade it for you — MetaMask must manage the upgrade " +
-            "for the delegation grant to work.",
-        });
-        return;
+        console.log("[grant] account has no code (plain EOA) — attempting ERC-7715 grant anyway (experiment).");
       }
 
       // GRANT via the kit (correct request serialization for the installed MetaMask gator).
       setState({ kind: "requesting", spec });
       const wallet7715 = walletClient.extend(erc7715ProviderActions());
-      const granted = await wallet7715.requestExecutionPermissions(
-        spec.map(specToKitRequest) as never,
+
+      // PRE-FLIGHT PROBE (ERC-7715 spec): ask the wallet which permission types/rules it
+      // actually supports on this chain BEFORE requesting. If a type we send isn't in this
+      // list, requestExecutionPermissions can fall through to the generic signTypedData path
+      // (→ the "internal accounts" block). This tells us definitively what's available.
+      try {
+        const supported = await (
+          wallet7715 as unknown as { getSupportedExecutionPermissions: () => Promise<unknown> }
+        ).getSupportedExecutionPermissions();
+        console.log(
+          "[grant] getSupportedExecutionPermissions:",
+          JSON.stringify(supported, (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
+        );
+      } catch (e) {
+        console.log(
+          "[grant] getSupportedExecutionPermissions threw:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+
+      const kitRequests = spec.map(specToKitRequest);
+      // Diagnostic: the exact payload handed to the kit (bigints → hex so it's JSON-loggable).
+      // Lets us see the precise tokenAddress/amounts if MetaMask rejects the parameters.
+      console.log(
+        "[grant] requestExecutionPermissions payload:",
+        JSON.stringify(kitRequests, (_k, v) => (typeof v === "bigint" ? `0x${v.toString(16)}` : v)),
       );
+      const granted = await wallet7715.requestExecutionPermissions(kitRequests as never);
+      // GRANT SUCCEEDED. The response contains bigint fields (echoed amounts), so every
+      // serialization of it MUST use a bigint-safe replacer — a plain JSON.stringify throws
+      // "Do not know how to serialize a BigInt".
+      console.log("[grant] GRANTED ✓:", jsonBigIntSafe(granted));
 
       setState({ kind: "posting", granted });
-      const res = await fetch(`http://localhost:${port}/callback`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ challenge, granted, ts: Date.now() }),
-      });
-      setState({ kind: "done", granted, callbackStatus: res.status });
+      // The grant is already done; the callback POST is a separate step. If it fails (e.g. the
+      // dummy test port with no bridge listening), still report the GRANT as successful rather
+      // than masking it behind a network error.
+      try {
+        const res = await fetch(`http://localhost:${port}/callback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: jsonBigIntSafe({ challenge, granted, ts: Date.now() }),
+        });
+        setState({ kind: "done", granted, callbackStatus: res.status });
+      } catch (postErr) {
+        console.log(
+          "[grant] grant succeeded; callback POST failed (expected on the dummy test port):",
+          postErr instanceof Error ? postErr.message : String(postErr),
+        );
+        setState({ kind: "done", granted, callbackStatus: 0 });
+      }
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : JSON.stringify(e);
       // MetaMask's ERC-7715 grant runs inside the `permissions-kernel-snap` sandbox
@@ -324,11 +441,21 @@ function GrantInner() {
         setState({ kind: "snap-error", spec, detection, raw });
         return;
       }
+      // MetaMask deliberately disables signing a delegation whose delegator is an internal
+      // MetaMask account (confirmed by MetaMask: too powerful to sign blind). The supported
+      // path is ERC-7715 Advanced Permissions — which we use — BUT MetaMask does not yet
+      // support Advanced Permissions from an EIP-7702 "stateless" smart account, which is what
+      // a "Switch to smart account" upgrade produces. So this grant cannot complete on the
+      // current MetaMask build regardless of account type. Don't tell the user to switch
+      // accounts (that loops them back here) — state the real platform limitation.
       const isInternal = /internal account|sign delegations/i.test(raw);
       const message = isInternal
-        ? `MetaMask refused to sign the delegation. This account couldn't be used as a Smart Account ` +
-          `(EIP-7702 gator implementation). Try: in MetaMask, switch this account to a Smart Account ` +
-          `and ensure it has a little Base Sepolia ETH for the one-time upgrade, then retry.\n\n(original: ${raw})`
+        ? `MetaMask blocked the delegation signature${accountDiag ? ` — ${accountDiag}` : ""}. ` +
+          `MetaMask disables signing a delegation from an internal MetaMask account for security, ` +
+          `and does not yet support ERC-7715 Advanced Permissions from an EIP-7702 "stateless" smart ` +
+          `account (which this account is). So this grant can't complete on the current MetaMask build ` +
+          `— it's a MetaMask platform limitation, not a Frost issue, and switching account types won't ` +
+          `change it. Frost continues via its session-key execution path.\n\n(original: ${raw})`
         : raw;
       setState({ kind: "error", message });
     }

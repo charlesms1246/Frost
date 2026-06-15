@@ -19,6 +19,9 @@
 </script>
 
 <script lang="ts">
+	import { onMount } from "svelte";
+	import { createMetaballField, frostTheme, type MetaballField } from "./metaball-field.js";
+
 	let {
 		class: className = "",
 		image,
@@ -27,21 +30,87 @@
 		fullscreen = false,
 		children,
 	}: GradientBackdropProps = $props();
+
+	let canvas = $state<HTMLCanvasElement | null>(null);
+	/** True once WebGL is up; otherwise the CSS gradient fallback stays visible. */
+	let glReady = $state(false);
+
+	function isDarkMode(): boolean {
+		if (typeof document === "undefined") return false;
+		return document.documentElement.classList.contains("dark");
+	}
+
+	/** Honor prefers-reduced-motion, the `still` prop, and an ancestor `.reduce-motion`. */
+	function motionDisabled(): boolean {
+		if (still) return true;
+		if (typeof window === "undefined") return false;
+		if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return true;
+		if (canvas?.closest(".reduce-motion")) return true;
+		return false;
+	}
+
+	onMount(() => {
+		const el = canvas;
+		if (!el) return;
+
+		// Interactive pointer blob only makes sense when we cover the viewport.
+		const field: MetaballField | null = createMetaballField(el, frostTheme(isDarkMode(), intensity), fullscreen);
+
+		if (!field) {
+			// WebGL unavailable / shader failed — keep the CSS gradient fallback.
+			glReady = false;
+			return;
+		}
+		glReady = true;
+
+		const applyTheme = () => field.setTheme(frostTheme(isDarkMode(), intensity));
+
+		if (motionDisabled()) {
+			// Paint a single static frame (gradient + blobs), no rAF loop.
+			applyTheme();
+		} else {
+			field.start();
+		}
+
+		// React to `.dark` class toggles on <html>.
+		const themeObserver = new MutationObserver(applyTheme);
+		themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
+		// React to reduced-motion preference changes.
+		const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+		const onMq = () => {
+			if (motionDisabled()) field.stop();
+			else field.start();
+			applyTheme();
+		};
+		mq?.addEventListener?.("change", onMq);
+
+		return () => {
+			themeObserver.disconnect();
+			mq?.removeEventListener?.("change", onMq);
+			field.destroy();
+		};
+	});
 </script>
 
 <!--
-	Animated frost-gradient accent. The app theme stays generic shadcn "Blue"
-	(layout.css tokens are untouched); this is a decorative accent layer using the
-	logo's ice→indigo palette. Drop a theme image via `image=…`; it sits under the
-	gradient so the gradient tints it. Respects prefers-reduced-motion.
+	Animated frost-gradient accent — a WebGL "lava lamp": gaussian metaball blobs in the
+	logo's ice→indigo→violet palette drift with random velocities and wrap around the
+	screen edges, plus one gentle pointer-following blob. Purely decorative (aria-hidden,
+	pointer-events:none) so it can sit behind any page without intercepting clicks.
+	Respects prefers-reduced-motion / `still` / an ancestor `.reduce-motion` (static frame),
+	and falls back to a pure-CSS gradient when WebGL is unavailable.
 -->
-<div class={cn("backdrop", `i-${intensity}`, fullscreen && "fullscreen", still && "still", className)} aria-hidden="true">
+<div
+	class={cn("backdrop", `i-${intensity}`, fullscreen && "fullscreen", className)}
+	aria-hidden="true"
+>
 	{#if image}
 		<div class="art" style={`background-image:url(${image})`}></div>
 	{/if}
-	<div class="blob blob-a"></div>
-	<div class="blob blob-b"></div>
-	<div class="blob blob-c"></div>
+	<!-- CSS gradient is always rendered as the WebGL fallback; the canvas paints over it. -->
+	<div class="css-fallback" class:hidden={glReady}></div>
+	<canvas bind:this={canvas} class="metaball"></canvas>
 	<div class="grain"></div>
 </div>
 
@@ -56,9 +125,10 @@
 		overflow: hidden;
 		background: var(--background);
 		isolation: isolate;
+		pointer-events: none;
 	}
-	/* Cover the whole viewport so the floating nav hovers over the gradient
-	   (no flat strip beside it). Sits behind page content (z-10) + chrome. */
+	/* Cover the whole viewport so floating chrome hovers over the gradient (no flat
+	   strip beside it). Sits behind page content (z-10) + chrome. */
 	.backdrop.fullscreen {
 		position: fixed;
 		inset: 0;
@@ -71,55 +141,38 @@
 		background-position: center;
 		opacity: 0.85;
 	}
-	.blob {
+	.metaball {
 		position: absolute;
-		border-radius: 9999px;
-		filter: blur(64px);
-		will-change: transform;
-		/* Light theme: multiply tints the bright base into soft frost pastels. */
-		mix-blend-mode: multiply;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		display: block;
 	}
-	/* Dark theme: screen makes the same blobs glow on the near-black base. */
-	:global(.dark) .blob {
-		mix-blend-mode: screen;
+	.i-subtle .metaball {
+		opacity: 0.85;
 	}
-	.i-subtle .blob {
-		opacity: 0.55;
+	.i-vivid .metaball {
+		opacity: 1;
 	}
-	.i-vivid .blob {
-		opacity: 0.8;
-		filter: blur(56px);
+	/* Static CSS gradient — shown until WebGL is confirmed (or forever if it fails). */
+	.css-fallback {
+		position: absolute;
+		inset: 0;
+		background:
+			radial-gradient(50% 60% at 14% 8%, #b7f4ff55, transparent 70%),
+			radial-gradient(58% 66% at 88% 92%, #6377df55, transparent 70%),
+			radial-gradient(44% 54% at 64% 36%, #9d6cff44, transparent 72%),
+			linear-gradient(180deg, #fbfdff, #eef1fb);
 	}
-	:global(.dark) .i-subtle .blob {
-		opacity: 0.45;
+	:global(.dark) .css-fallback {
+		background:
+			radial-gradient(50% 60% at 14% 8%, #b7f4ff44, transparent 70%),
+			radial-gradient(58% 66% at 88% 92%, #6377df66, transparent 70%),
+			radial-gradient(44% 54% at 64% 36%, #9d6cff55, transparent 72%),
+			linear-gradient(180deg, #0b0b14, #11101c);
 	}
-	:global(.dark) .i-vivid .blob {
-		opacity: 0.7;
-	}
-	/* frost palette: ice-cyan #B7F4FF · periwinkle #7694E6 · indigo #6377DF */
-	.blob-a {
-		top: -12%;
-		left: -8%;
-		width: 48%;
-		height: 60%;
-		background: radial-gradient(circle at 50% 50%, #b7f4ff, transparent 70%);
-		animation: drift-a 22s ease-in-out infinite alternate;
-	}
-	.blob-b {
-		bottom: -18%;
-		right: -10%;
-		width: 56%;
-		height: 64%;
-		background: radial-gradient(circle at 50% 50%, #6377df, transparent 70%);
-		animation: drift-b 28s ease-in-out infinite alternate;
-	}
-	.blob-c {
-		top: 28%;
-		left: 34%;
-		width: 40%;
-		height: 50%;
-		background: radial-gradient(circle at 50% 50%, #7694e6, transparent 72%);
-		animation: drift-c 25s ease-in-out infinite alternate;
+	.css-fallback.hidden {
+		display: none;
 	}
 	.grain {
 		position: absolute;
@@ -127,38 +180,5 @@
 		background-image: radial-gradient(var(--foreground) 0.5px, transparent 0.5px);
 		background-size: 4px 4px;
 		opacity: 0.015;
-	}
-	@keyframes drift-a {
-		from {
-			transform: translate3d(0, 0, 0) scale(1);
-		}
-		to {
-			transform: translate3d(18%, 12%, 0) scale(1.15);
-		}
-	}
-	@keyframes drift-b {
-		from {
-			transform: translate3d(0, 0, 0) scale(1.1);
-		}
-		to {
-			transform: translate3d(-16%, -10%, 0) scale(1);
-		}
-	}
-	@keyframes drift-c {
-		from {
-			transform: translate3d(0, 0, 0) scale(0.95);
-		}
-		to {
-			transform: translate3d(-12%, 16%, 0) scale(1.2);
-		}
-	}
-	.still .blob,
-	:global(.reduce-motion) .blob {
-		animation: none !important;
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.blob {
-			animation: none !important;
-		}
 	}
 </style>

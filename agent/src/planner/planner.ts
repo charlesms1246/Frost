@@ -74,9 +74,12 @@ export class Planner {
 
     const parsed = parsePlannerOutput(text);
     if (parsed === null) {
+      // Surface a snippet of the raw model output so the HITL escalation is
+      // diagnosable (otherwise the failure is opaque — we can't tell WHAT the
+      // model returned, only that it didn't fit the shape).
       return this.escalation(
         input,
-        "planner output was not parseable JSON in the expected shape",
+        `planner output was not parseable JSON in the expected shape — raw output: ${snippet(text)}`,
         [],
         modelUsed,
         inferenceCallId,
@@ -238,4 +241,10 @@ function decodeCandidate(
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** A single-line, length-capped view of model text for an escalation reason. */
+function snippet(text: string, max = 280): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  return t.length > max ? `${t.slice(0, max)}…` : t || "(empty response)";
 }

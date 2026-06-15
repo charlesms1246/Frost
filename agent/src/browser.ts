@@ -16,6 +16,7 @@ export * from "./inference/venice-inference.js";
 export * from "./inference/switching.js";
 export * from "./inference/x402-inference.js";
 export * from "./inference/x402-signer.js";
+export * from "./inference/x402-delegation.js";
 export {
   buildReceipt,
   hashLeaf,
@@ -152,6 +153,8 @@ export {
   type Resolved,
 } from "./comms/escape.js";
 export { DiscordWebhookPoster, type FetchLike as DiscordFetchLike } from "./comms/discord.js";
+export { EmailPoster, type EmailPosterOptions } from "./comms/email.js";
+export { FanoutPoster } from "./comms/fanout.js";
 export {
   priceThresholdCondition,
   type PriceThresholdOptions,

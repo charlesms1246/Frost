@@ -1,5 +1,7 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { config, fallbackKeyOf, type ProviderId } from "$lib/stores/config.svelte";
   import { syncConfigToHosted } from "$lib/config-sync";
   import { provisionSigningWallet } from "$lib/signing-wallet";
@@ -120,13 +122,52 @@
     if (step > 0) step -= 1;
   }
 
+  const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+  const isRealAddr = (a?: string) => !!a && /^0x[0-9a-fA-F]{40}$/.test(a) && a !== ZERO_ADDR;
+
+  /**
+   * Demo auto-provision: use the pre-funded 1Shot executor wallet from the repo `.env`
+   * (`load_demo_credentials`) as the agent's signing wallet, instead of the no-creds
+   * placeholder (`0x000…`). Stores it in config so it syncs to the cloud and follows the
+   * user across devices. Returns true if it set a real wallet.
+   */
+  async function autoProvisionFromDemo(): Promise<boolean> {
+    try {
+      const demo = await invoke<{ walletAddress?: string; walletId?: string }>("load_demo_credentials");
+      if (isRealAddr(demo?.walletAddress)) {
+        signingWalletAddress = demo!.walletAddress!;
+        if (demo!.walletId) signingWalletId = demo!.walletId;
+        config.update({
+          signingWalletAddress,
+          ...(signingWalletId ? { signingWalletId } : {}),
+        });
+        return true;
+      }
+    } catch {
+      /* packaged build / no demo creds — fall through to the real provisioner */
+    }
+    return false;
+  }
+
+  // Auto-provision the signing wallet on first arrival (signup). If the user signed in and
+  // restored a signing wallet from the cloud, this is a no-op (already set).
+  onMount(() => {
+    if (!isRealAddr(config.value.signingWalletAddress)) void autoProvisionFromDemo();
+  });
+
   async function provision() {
     if (provisioning) return;
     provisioning = true;
     try {
+      // Prefer the funded demo wallet; fall back to the real (creds-driven) provisioner.
+      if (await autoProvisionFromDemo()) return;
       const w = await provisionSigningWallet();
       signingWalletId = w.walletId;
       signingWalletAddress = w.address;
+      config.update({
+        ...(isRealAddr(w.address) ? { signingWalletAddress: w.address } : {}),
+        ...(w.walletId ? { signingWalletId: w.walletId } : {}),
+      });
     } finally {
       provisioning = false;
     }

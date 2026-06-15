@@ -1,9 +1,10 @@
 "use client";
 
-// Pitch deck — a VC/judge-facing slide template. Content is intentionally a
-// placeholder skeleton to be finalised once the app is deployed; the deck
-// mechanics (keyboard / arrow / dot navigation, one slide per viewport) are
-// done. Reach it at /pitch.
+// Pitch deck — the judge-facing presentation deck (5 slides), the on-screen
+// pitch that runs alongside the demo video. Keyboard / arrow / dot navigation,
+// one slide per viewport. Reach it at /pitch. Content tracks hackathon-pitch.md
+// and DEMO_SCRIPT.md — keep the closing claim (slide 04) verifiable on screen
+// or on BaseScan.
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -18,54 +19,55 @@ const SLIDES: Slide[] = [
   {
     kicker: "Port-42",
     title: <>FROST</>,
-    body: <p className="slide-lede">Bounded autonomy for web3 operators. Describe a workflow, sign once, walk away.</p>,
+    body: (
+      <>
+        <p className="slide-lede">Bounded autonomy for web3 operators. Describe a workflow in plain English, sign once, walk away — work that settles per call in USDC and stays revocable mid-flight.</p>
+        <p className="slide-accent">Signed. Scoped. Revocable.</p>
+      </>
+    ),
   },
   {
-    kicker: "01 · Problem",
-    title: <>Agents are trusted too much<br />or used too little.</>,
-    body: <p className="slide-lede">To automate on-chain workflows today you either hand an agent your keys (unbounded risk) or babysit every action (no autonomy). There is no middle ground that is signed, scoped, and revocable.</p>,
+    kicker: "01 · The problem",
+    title: <>You hand it the keys<br />and hope.</>,
+    body: <p className="slide-lede">Agents act with no scope — one you spin up to rebalance your position can, technically, drain it. No spending cap, no off switch once it&apos;s running, no record of what it did. So you either over-trust it (unbounded risk) or babysit every move (no autonomy). No middle ground that is signed, scoped, and revocable.</p>,
   },
   {
-    kicker: "02 · Solution",
-    title: <>One signature.<br />Bounded authority.</>,
-    body: <p className="slide-lede">Frost compiles a plain-English brief into a structured mandate with explicit caveats. You sign once. A master agent spawns specialists inside strictly bounded sub-mandates — and you can revoke any branch mid-flight.</p>,
-  },
-  {
-    kicker: "03 · How it works",
+    kicker: "02 · Frost",
     title: <>Describe → Sign → Walk away.</>,
     body: (
       <div className="slide-cols">
-        <div><div className="slide-col-h">Describe</div><p>A trigger, an action, and limits in one sentence.</p></div>
-        <div><div className="slide-col-h">Compile &amp; sign</div><p>The master compiles caveats, caps, TTL, HITL. You sign once.</p></div>
-        <div><div className="slide-col-h">Walk away</div><p>Sub-agents spawn on demand; high-stakes actions pause for you.</p></div>
+        <div><div className="slide-col-h">Describe</div><p>A trigger, an action, and limits in one English sentence.</p></div>
+        <div><div className="slide-col-h">Compile &amp; sign</div><p>The master compiles it into a structured mandate — caps, slippage, TTL, HITL, spawning bounds. You review the spec and sign once.</p></div>
+        <div><div className="slide-col-h">Walk away</div><p>The master spawns specialists on demand inside bounded sub-mandates. High-stakes actions pause for you; you revoke any branch mid-flight.</p></div>
       </div>
     ),
   },
   {
-    kicker: "04 · Why now",
-    title: <>The rails just landed.</>,
-    body: <p className="slide-lede">MetaMask Smart Accounts, ERC-7710/7715 redelegation, and x402 stablecoin payments are all production-ready in 2026. Frost is the first product to compose them into a safe, autonomous operator.</p>,
-  },
-  {
-    kicker: "05 · Stack",
-    title: <>Built on proven infra.</>,
+    kicker: "03 · What's different",
+    title: <>Bounded autonomy,<br />with a receipt.</>,
     body: (
-      <div className="caveats slide-chips">
-        {[["IDENTITY", "MetaMask Smart Accounts"], ["AUTHORITY", "ERC-7710"], ["SETTLEMENT", "x402 · USDC"], ["INFERENCE", "Venice AI"], ["EXECUTION", "1Shot API"], ["AUDIT", "On-chain Merkle"]].map(([k, v]) => (
-          <span className="chip" key={k}><span className="k">{k}</span><b>{v}</b></span>
-        ))}
+      <div className="slide-cols slide-cols--quad">
+        <div><div className="slide-col-h">Dynamic A2A spawning</div><p>The master decides at runtime what specialists a task needs and spawns them under signed <code>CAP_REDELEGATE</code> bounds — not a fixed template.</p></div>
+        <div><div className="slide-col-h">Per-call USDC, no API keys</div><p>Every inference call is paid per call in USDC over x402, settled as a delegation of your own Smart Account grant.</p></div>
+        <div><div className="slide-col-h">HITL + revocation</div><p>Above your signed threshold Frost stops and asks. Revoking spawning authority halts new sub-agents at the contract layer.</p></div>
+        <div><div className="slide-col-h">On-chain audit trail</div><p>Every decision is committed to a tamper-evident Merkle root on-chain, co-signed so neither side can forge history.</p></div>
       </div>
     ),
   },
   {
-    kicker: "06 · Traction",
-    title: <>Hackathon → product.</>,
-    body: <p className="slide-lede">Targeting the MetaMask Smart Accounts × 1Shot Dev Cook-Off (submission June 15 2026), across the Best x402 + ERC-7710, A2A Coordination, Best Agent, and Best Venice AI tracks. Placeholder — replace with live metrics post-deploy.</p>,
-  },
-  {
-    kicker: "07 · Ask",
-    title: <>Let&apos;s talk.</>,
-    body: <p className="slide-lede">We&apos;re raising / partnering to take Frost from Base Sepolia to mainnet. <span className="slide-accent">hello@frost.example</span></p>,
+    kicker: "04 · The stack & the ask",
+    title: <>Five primitives.<br />One product.</>,
+    body: (
+      <>
+        <div className="caveats slide-chips">
+          {[["IDENTITY", "MetaMask Smart Accounts"], ["AUTHORITY", "ERC-7710 / 7715"], ["SETTLEMENT", "x402 · USDC"], ["INFERENCE", "Venice AI"], ["EXECUTION", "1Shot API"], ["AUDIT", "On-chain Merkle"]].map(([k, v]) => (
+            <span className="chip" key={k}><span className="k">{k}</span><b>{v}</b></span>
+          ))}
+        </div>
+        <p className="slide-lede">Targeting the MetaMask Smart Accounts × 1Shot Dev Cook-Off across the Best x402 + ERC-7710, A2A Coordination, Best Agent, and Best Venice AI tracks. Open source, running on <span className="slide-accent">Base Sepolia today</span>.</p>
+        <Link className="cta slide-cta" href="/download">Download Frost</Link>
+      </>
+    ),
   },
 ];
 

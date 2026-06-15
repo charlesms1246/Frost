@@ -291,12 +291,15 @@ function decodeModelValues(o: CompilerOutput): ModelValues {
     const v = parseAmount(s, label);
     return v;
   };
-  const int = (n: number | undefined, label: string, lo: number, hi: number): number | undefined => {
-    if (n === undefined) return undefined;
-    if (!Number.isInteger(n) || n < lo || n > hi) {
-      throw new Error(`${label} must be an integer in [${lo}, ${hi}], got ${n}`);
+  const int = (n: number | string | undefined, label: string, lo: number, hi: number): number | undefined => {
+    if (n === undefined || n === null) return undefined;
+    // The model's JSON often carries numeric fields as strings ("50"); coerce before
+    // validating so a well-formed-but-stringly-typed value isn't rejected as a compile failure.
+    const num = typeof n === "number" ? n : typeof n === "string" ? Number(n.trim()) : NaN;
+    if (!Number.isInteger(num) || num < lo || num > hi) {
+      throw new Error(`${label} must be an integer in [${lo}, ${hi}], got ${JSON.stringify(n)}`);
     }
-    return n;
+    return num;
   };
   const sc = amt(o.spendCapTotal, "spendCapTotal");
   if (sc !== undefined) out.spendCapTotal = sc;

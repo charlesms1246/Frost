@@ -10,11 +10,11 @@ Hand-rolled minimal HTTP server in `frost/src-tauri/src/wallet_bridge.rs` using 
 
 - Binds `127.0.0.1:0` (OS-picked ephemeral port).
 - Generates a base64url 32-byte one-time challenge.
-- Opens the system browser to `<bridge_base>/connect/<op>/?challenge=...&port=...&params=...`. In dev (`debug_assertions`), `bridge_base` is `http://localhost:3000`; in release, `https://port42.vercel.app`. Overridable via `FROST_BRIDGE_BASE`.
+- Opens the system browser to `<bridge_base>/connect/<op>/?challenge=...&port=...&params=...`. In dev (`debug_assertions`), `bridge_base` is `http://localhost:3000`; in release, `https://xfrost.vercel.app`. Overridable via `FROST_BRIDGE_BASE`.
 - Handles OPTIONS preflight (writes CORS headers) and one POST to `/callback`.
 - Validates the body's `challenge` matches; returns the body to the Svelte caller via the Tauri command `wallet_bridge_perform`.
 
-Allowed origins are env-aware: dev allows `http://localhost:3000` + `https://port42.vercel.app`; release allows only `port42.vercel.app`.
+Allowed origins are env-aware: dev allows `http://localhost:3000` + `https://xfrost.vercel.app`; release allows only `xfrost.vercel.app`.
 
 ## Observation
 
@@ -24,12 +24,12 @@ Allowed origins are env-aware: dev allows `http://localhost:3000` + `https://por
 
 ### Smoke test — verified
 
-| Step | Expected | Observed |
-|---|---|---|
-| `npm run tauri dev` from `frost/` boots cleanly | OK | ✅ |
-| In `/bridge`, click Run with `echo` | system browser opens with full URL | ✅ (after Windows opener fix — see Bug below) |
-| Page auto-POSTs; Tauri panel shows echoed body | yes | ✅ verified during spike 8 chain (same code path) |
-| Browser DevTools console | no CORS errors | ✅ |
+| Step                                            | Expected                           | Observed                                          |
+| ----------------------------------------------- | ---------------------------------- | ------------------------------------------------- |
+| `npm run tauri dev` from `frost/` boots cleanly | OK                                 | ✅                                                |
+| In `/bridge`, click Run with `echo`             | system browser opens with full URL | ✅ (after Windows opener fix — see Bug below)     |
+| Page auto-POSTs; Tauri panel shows echoed body  | yes                                | ✅ verified during spike 8 chain (same code path) |
+| Browser DevTools console                        | no CORS errors                     | ✅                                                |
 
 ### Bug found and fixed
 

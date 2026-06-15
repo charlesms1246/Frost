@@ -15,6 +15,8 @@ const COLLECTION = "users";
 
 export type UserData = {
   profile?: { displayName?: string; email?: string; avatarDataUrl?: string };
+  /** The user's 1Shot signing/agent wallet (custodial address + id — NO key). */
+  signingWallet?: { address?: string; walletId?: string };
   /** Serialized chat history (the desktop `chats` store). */
   chats?: unknown[];
   /** Serialized automations (custom agents + saved workflows). */

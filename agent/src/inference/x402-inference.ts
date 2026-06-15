@@ -22,6 +22,7 @@ import type {
   CompletionRequest,
   CompletionResponse,
 } from "./openrouter.js";
+import { parseUsage } from "./openrouter.js";
 
 /** Minimal response shape we need — adds header access on top of {@link FetchLike}. */
 export interface X402FetchResponse {
@@ -180,6 +181,7 @@ export class X402InferenceClient implements InferenceTransport {
         raw,
       );
     }
-    return { text, model: data.model ?? (req.model || this.model), id: data.id ?? "" };
+    const usage = parseUsage(data);
+    return { text, model: data.model ?? (req.model || this.model), id: data.id ?? "", ...(usage ? { usage } : {}) };
   }
 }

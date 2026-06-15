@@ -1,105 +1,121 @@
 <script lang="ts">
+  import { browser } from "$app/environment";
+  import { SvelteFlow, Background, type Node, type Edge } from "@xyflow/svelte";
+  import "@xyflow/svelte/dist/style.css";
   import type { AgentSessionStore, NodeStatus } from "$lib/stores/agent-session.svelte";
-  import { Badge } from "$lib/components/ui/badge";
-  import { Button } from "$lib/components/ui/button";
-  import Ban from "@lucide/svelte/icons/ban";
+  import AgentFlowNode, { type AgentNodeData, type FlowState } from "./AgentFlowNode.svelte";
 
   let { store, onRevoke, revoking = false }: { store: AgentSessionStore; onRevoke?: () => void; revoking?: boolean } = $props();
 
-  const STATUS: Record<NodeStatus, { label: string; badge: "default" | "secondary" | "outline" | "destructive"; dot: string }> = {
-    planned: { label: "planned", badge: "outline", dot: "bg-muted-foreground/40" },
-    issued: { label: "issued", badge: "secondary", dot: "bg-sky-500" },
-    running: { label: "running", badge: "default", dot: "bg-amber-500 animate-pulse" },
-    done: { label: "done", badge: "secondary", dot: "bg-emerald-500" },
-    failed: { label: "failed", badge: "destructive", dot: "bg-destructive" },
-  };
+  const nodeTypes = { agent: AgentFlowNode };
 
-  const usdc = (v?: bigint) => (v === undefined ? "" : `$${(Number(v) / 1e6).toFixed(2)}`);
-  const short = (h?: string) => (h ? `${h.slice(0, 6)}…${h.slice(-4)}` : "");
-  const EXPLORER = "https://sepolia.basescan.org/tx/";
+  const BADGE: Record<NodeStatus, "default" | "secondary" | "outline" | "destructive"> = {
+    planned: "outline",
+    issued: "secondary",
+    running: "default",
+    done: "secondary",
+    failed: "destructive",
+  };
+  function flowStateOf(status: NodeStatus, revoked = false): FlowState {
+    if (revoked || status === "failed") return "disabled";
+    if (status === "running") return "active";
+    return "passive";
+  }
+  const usdc = (v?: bigint) => (v === undefined ? undefined : `$${(Number(v) / 1e6).toFixed(2)}`);
+
+  // Build the flow graph from the live session store. Master at top; sub-agents fan out
+  // below it. Recomputed whenever the store's nodes / statuses / revocation change.
+  let nodes = $state.raw<Node[]>([]);
+  let edges = $state.raw<Edge[]>([]);
+
+  $effect(() => {
+    const m = store.master;
+    const revoked = store.spawningRevoked;
+    const children = store.children;
+
+    const masterData: AgentNodeData = {
+      title: "Master agent",
+      isMaster: true,
+      statusLabel: revoked ? "spawning revoked" : m.status,
+      flowState: flowStateOf(m.status, revoked),
+      badge: revoked ? "destructive" : BADGE[m.status],
+      revoked,
+      ...(m.description ? { detail: m.description } : {}),
+      ...(m.rootMandateId ? { mandateId: m.rootMandateId } : {}),
+      ...(store.revokeTxHash ? { txHash: store.revokeTxHash } : {}),
+      ...(onRevoke ? { onRevoke, revoking } : {}),
+    };
+
+    const n: Node[] = [
+      { id: "master", type: "agent", position: { x: 0, y: 0 }, data: masterData as unknown as Record<string, unknown>, draggable: false },
+    ];
+    const e: Edge[] = [];
+
+    const count = children.length;
+    children.forEach((c, i) => {
+      const fs = flowStateOf(c.status);
+      const data: AgentNodeData = {
+        title: c.role,
+        statusLabel: c.status,
+        flowState: fs,
+        badge: BADGE[c.status],
+        ...(c.behavior ? { behavior: c.behavior } : {}),
+        ...(c.detail ? { detail: c.detail } : {}),
+        ...(usdc(c.spendCapTotal) ? { cap: usdc(c.spendCapTotal) } : {}),
+        ...(c.mandateId ? { mandateId: c.mandateId } : {}),
+        ...(c.txHash ? { txHash: c.txHash } : {}),
+      };
+      const id = `child-${c.index}`;
+      n.push({
+        id,
+        type: "agent",
+        position: { x: (i - (count - 1) / 2) * 252, y: 200 },
+        data: data as unknown as Record<string, unknown>,
+        draggable: false,
+      });
+      e.push({
+        id: `e-${id}`,
+        source: "master",
+        target: id,
+        animated: c.status === "running",
+        // Greyed when the spawn line is dead (revoked / failed leaf).
+        style: revoked || c.status === "failed" ? "opacity:0.4" : "",
+      });
+    });
+
+    nodes = n;
+    edges = e;
+  });
 </script>
 
-<div class="flex flex-col gap-3">
-  <!-- Master node -->
-  <div class="rounded-lg border bg-card p-3 {store.spawningRevoked ? 'opacity-60' : ''}">
-    <div class="flex items-center justify-between gap-2">
-      <div class="flex items-center gap-2">
-        <span class="size-2.5 rounded-full {store.spawningRevoked ? 'bg-destructive' : STATUS[store.master.status].dot}"></span>
-        <span class="font-medium">Master agent</span>
-      </div>
-      <div class="flex items-center gap-2">
-        {#if store.spawningRevoked}
-          <Badge variant="destructive">spawning revoked</Badge>
-        {:else}
-          <Badge variant={STATUS[store.master.status].badge}>{STATUS[store.master.status].label}</Badge>
-          {#if onRevoke}
-            <Button size="sm" variant="outline" class="h-6 px-2 text-[11px]" onclick={onRevoke} disabled={revoking}>
-              <Ban class="mr-1 size-3" /> Revoke spawning
-            </Button>
-          {/if}
-        {/if}
-      </div>
-    </div>
-    <p class="mt-1 line-clamp-2 text-xs text-muted-foreground">{store.master.description || "No session yet."}</p>
-    {#if store.master.rootMandateId}
-      <p class="mt-1 font-mono text-[10px] text-muted-foreground">root {short(store.master.rootMandateId)}</p>
-    {/if}
-    {#if store.spawningRevoked}
-      <p class="mt-1 text-[10px] text-destructive">
-        CAP_REDELEGATE revoked — new sub-agents are refused; in-flight ones finish.
-        {#if store.revokeTxHash}
-          <a class="font-mono hover:underline" href={EXPLORER + store.revokeTxHash} target="_blank" rel="noreferrer">tx {short(store.revokeTxHash)}</a>
-        {/if}
-      </p>
-    {/if}
-  </div>
-
+<div class="flex h-full min-h-[420px] flex-col gap-3">
   {#if store.bestRoute}
     <div class="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300">
       <span class="font-medium">Best route:</span>
-      {store.bestRoute.label} — {usdc(store.bestRoute.amountOutUsdc)}
+      {store.bestRoute.label} — ${(Number(store.bestRoute.amountOutUsdc) / 1e6).toFixed(2)}
       <span class="text-[10px] opacity-70">(best of {store.bestRoute.outOf} quote{store.bestRoute.outOf === 1 ? "" : "s"})</span>
     </div>
   {/if}
 
-  {#if store.children.length > 0}
-    <div class="relative ml-3 flex flex-col gap-2 border-l pl-5">
-      {#each store.children as node (node.index)}
-        <div class="relative rounded-lg border bg-card p-3">
-          <!-- connector -->
-          <span class="absolute -left-5 top-5 h-px w-5 bg-border"></span>
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <span class="size-2.5 rounded-full {STATUS[node.status].dot}"></span>
-              <span class="font-medium">{node.role}</span>
-              {#if node.behavior}
-                <Badge variant="outline" class="text-[10px]">{node.behavior}</Badge>
-              {/if}
-            </div>
-            <Badge variant={STATUS[node.status].badge}>{STATUS[node.status].label}</Badge>
-          </div>
-          <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
-            {#if node.spendCapTotal !== undefined}
-              <span>cap {usdc(node.spendCapTotal)}</span>
-            {/if}
-            {#if node.mandateId}
-              <span class="font-mono">id {short(node.mandateId)}</span>
-            {/if}
-            {#if node.txHash}
-              <a class="font-mono text-sky-600 hover:underline dark:text-sky-400" href={EXPLORER + node.txHash} target="_blank" rel="noreferrer">
-                tx {short(node.txHash)}
-              </a>
-            {/if}
-          </div>
-          {#if node.detail}
-            <p class="mt-1 text-[10px] {node.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}">{node.detail}</p>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  {:else if store.phase !== "idle"}
-    <p class="ml-3 text-xs text-muted-foreground">Waiting for the planner to decide sub-agents…</p>
-  {/if}
+  <div class="relative min-h-0 flex-1 overflow-hidden rounded-xl border bg-background/20">
+    {#if browser}
+      <SvelteFlow
+        bind:nodes
+        bind:edges
+        {nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        panOnScroll
+        proOptions={{ hideAttribution: true }}
+        style="background: transparent;"
+      >
+        <Background gap={20} class="opacity-40" />
+      </SvelteFlow>
+    {/if}
+  </div>
 
   {#if store.escalation}
     <div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">

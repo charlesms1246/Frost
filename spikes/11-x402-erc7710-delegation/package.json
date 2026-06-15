@@ -1,0 +1,27 @@
+{
+  "name": "spike-11-x402-erc7710-delegation",
+  "private": true,
+  "type": "module",
+  "description": "Verify x402 settlement via an ERC-7710 delegation payload (MetaMask sentinel facilitator) end-to-end: custom Erc7710Scheme seller + createx402DelegationProvider buyer. Devrel-confirmed approach; spike BEFORE integrating into Frost's gateway/agent.",
+  "scripts": {
+    "seller": "tsx seller.ts",
+    "buyer": "tsx buyer.ts",
+    "spike": "tsx run.ts"
+  },
+  "dependencies": {
+    "@metamask/smart-accounts-kit": "^1.6.0",
+    "@metamask/x402": "^0.2.0",
+    "@x402/core": "^2.14.0",
+    "@x402/evm": "^2.14.0",
+    "@x402/express": "^2.14.0",
+    "@x402/fetch": "^2.14.0",
+    "express": "^5.0.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
