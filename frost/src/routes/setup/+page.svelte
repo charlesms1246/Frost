@@ -5,6 +5,7 @@
   import { config, fallbackKeyOf, type ProviderId } from "$lib/stores/config.svelte";
   import { syncConfigToHosted } from "$lib/config-sync";
   import { provisionSigningWallet } from "$lib/signing-wallet";
+  import { oneShotTauriFetch } from "$lib/tauri-fetch";
   import { captureMetaMaskAuthority } from "$lib/wallet-connect";
   import AuthShell from "$lib/components/brand/AuthShell.svelte";
   import { Button } from "$lib/components/ui/button";
@@ -159,9 +160,22 @@
     if (provisioning) return;
     provisioning = true;
     try {
-      // Prefer the funded demo wallet; fall back to the real (creds-driven) provisioner.
+      // Prefer the funded demo wallet; else create/reuse a real 1Shot custodial wallet for
+      // this user via the business creds (HTTP routed through Rust — no webview CORS, secrets
+      // stay server-side); else the honest placeholder.
       if (await autoProvisionFromDemo()) return;
-      const w = await provisionSigningWallet();
+      const creds = await invoke<{ apiKey?: string; apiSecret?: string; businessId?: string }>(
+        "load_demo_credentials",
+      ).catch(() => ({}) as { apiKey?: string; apiSecret?: string; businessId?: string });
+      const w =
+        creds.apiKey && creds.apiSecret && creds.businessId
+          ? await provisionSigningWallet({
+              apiKey: creds.apiKey,
+              apiSecret: creds.apiSecret,
+              businessId: creds.businessId,
+              fetchImpl: oneShotTauriFetch,
+            })
+          : await provisionSigningWallet();
       signingWalletId = w.walletId;
       signingWalletAddress = w.address;
       config.update({

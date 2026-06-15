@@ -1,4 +1,4 @@
-import { OneShotRestWallets } from "@frost/agent/browser";
+import { OneShotRestWallets, type OneShotFetch } from "@frost/agent/browser";
 
 /**
  * Provisions the custodial signing wallet Frost uses for live on-chain actions.
@@ -27,6 +27,8 @@ export type ProvisionCreds = {
 	baseUrl?: string;
 	/** Wallet name — reused if one already exists (idempotent). */
 	name?: string;
+	/** 1Shot HTTP fetch — pass the Tauri-backed fetch so the call runs from Rust (no CORS). */
+	fetchImpl?: OneShotFetch;
 };
 
 const BASE_SEPOLIA_CHAIN_ID = 84532;
@@ -44,6 +46,7 @@ export async function provisionSigningWallet(creds?: ProvisionCreds): Promise<Pr
 		apiKey: creds.apiKey,
 		apiSecret: creds.apiSecret,
 		...(creds.baseUrl ? { baseUrl: creds.baseUrl } : {}),
+		...(creds.fetchImpl ? { fetchImpl: creds.fetchImpl } : {}),
 	});
 	const existing = (await wallets.list(creds.businessId)).find((w) => w.name === name);
 	if (existing) return { walletId: existing.walletId, address: existing.accountAddress };

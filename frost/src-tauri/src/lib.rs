@@ -58,6 +58,11 @@ struct DemoCredentials {
     wallet_id: Option<String>,
     wallet_address: Option<String>,
     swap_method_id: Option<String>,
+    /// 1Shot business id — provisioning a per-user custodial signing wallet (#5).
+    business_id: Option<String>,
+    /// 1Shot contract-method id for `AuditRegistry.commit` — gas-sponsored audit
+    /// anchoring through the 1Shot server wallet (#4). Absent ⇒ session-key fallback.
+    audit_method_id: Option<String>,
 }
 
 fn env_from_file(contents: &str, key: &str) -> Option<String> {
@@ -116,6 +121,8 @@ fn load_demo_credentials() -> DemoCredentials {
         wallet_id: get("ONESHOT_WALLET_ID"),
         wallet_address: get("ONESHOT_WALLET_ADDRESS"),
         swap_method_id: get("ONESHOT_SWAP_METHOD_ID"),
+        business_id: get("ONESHOT_BUSINESS_ID"),
+        audit_method_id: get("ONESHOT_AUDIT_METHOD_ID"),
     }
 }
 
@@ -123,6 +130,7 @@ fn load_demo_credentials() -> DemoCredentials {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
         .setup(|app| {
             // System tray: lets Frost keep running with the window closed so the
             // in-webview agents stay active. The menu reopens or fully quits the app.

@@ -27,6 +27,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
+# Rust-side HTTP (no webview CORS) for 1Shot REST calls — the 1Shot API returns
+# `Access-Control-Allow-Origin: *` together with `Access-Control-Allow-Credentials: true`,
+# which the WebView2/Chromium fetch rejects ("Failed to fetch"). Routing through Rust also
+# keeps the 1Shot secrets out of the renderer.
+tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }

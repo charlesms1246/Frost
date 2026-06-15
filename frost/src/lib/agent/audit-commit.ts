@@ -9,6 +9,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { audit, FROST_BASE_SEPOLIA } from "@frost/sdk";
+import { OneShotRestMethods, type OneShotFetch } from "@frost/agent/browser";
 
 /**
  * On-chain audit anchor (§10.8, demo's closing shot): commit a session's Merkle root to
@@ -52,6 +53,54 @@ export async function liveCommitAudit(opts: LiveCommitOptions): Promise<Hex> {
       sessionEnd: opts.sessionEnd,
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Gas-sponsored anchor (#4): submit AuditRegistry.commit through a 1Shot server
+// wallet, so 1Shot sponsors gas and the session key needs no ETH.
+// ---------------------------------------------------------------------------
+
+export interface OneShotCommitOptions {
+  oneShot: {
+    apiKey: string;
+    apiSecret: string;
+    /** The 1Shot server wallet that signs + relays (1Shot pays gas). */
+    walletId: string;
+    /** Pre-registered 1Shot method id for `AuditRegistry.commit`. */
+    methodId: string;
+    baseUrl?: string;
+  };
+  sessionId: Hex;
+  merkleRoot: Hex;
+  /** Session-end timestamp in seconds. */
+  sessionEnd: bigint;
+  /** 1Shot HTTP fetch — pass the Tauri-backed fetch so the call runs from Rust (no CORS). */
+  fetchImpl?: OneShotFetch;
+}
+
+/**
+ * Anchor a session's Merkle root by submitting `AuditRegistry.commit(sessionId, merkleRoot,
+ * sessionEnd)` through a 1Shot server wallet's method registry. 1Shot sponsors gas, so —
+ * unlike {@link liveCommitAudit} — no funded session key (with ETH) is required. The 1Shot
+ * method must be pre-registered (`ONESHOT_AUDIT_METHOD_ID`) with named params
+ * `sessionId` / `merkleRoot` / `sessionEnd`. Returns the on-chain tx hash when 1Shot reports it.
+ */
+export async function commitAuditViaOneShot(
+  opts: OneShotCommitOptions,
+): Promise<{ txHash?: string; transactionId: string; status: string }> {
+  const cfg: ConstructorParameters<typeof OneShotRestMethods>[0] = {
+    apiKey: opts.oneShot.apiKey,
+    apiSecret: opts.oneShot.apiSecret,
+  };
+  if (opts.oneShot.baseUrl) cfg.baseUrl = opts.oneShot.baseUrl;
+  if (opts.fetchImpl) cfg.fetchImpl = opts.fetchImpl;
+  const methods = new OneShotRestMethods(cfg);
+  const tx = await methods.execute(
+    opts.oneShot.methodId,
+    { sessionId: opts.sessionId, merkleRoot: opts.merkleRoot, sessionEnd: opts.sessionEnd.toString() },
+    { walletId: opts.oneShot.walletId },
+  );
+  return { transactionId: tx.id, status: tx.status, ...(tx.transactionHash ? { txHash: tx.transactionHash } : {}) };
 }
 
 // ---------------------------------------------------------------------------

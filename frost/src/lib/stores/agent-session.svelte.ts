@@ -77,6 +77,25 @@ export interface MasterNode {
   status: NodeStatus;
 }
 
+/**
+ * The serializable view of a session — everything the tree, activity log, usage
+ * table and audit receipt render from. Persisted per session (see the `sessions`
+ * store) so a completed run's full trail survives navigation/reload and can be
+ * re-opened read-only. Re-applied via {@link AgentSessionStore.restore}.
+ */
+export interface SessionSnapshot {
+  phase: Phase;
+  master: MasterNode;
+  children: AgentNode[];
+  activity: ActivityLine[];
+  routes: { venice: number; openrouter: number };
+  inferenceUsage: UsageRecord[];
+  authority?: { subMandateCount: number; aggregateSubMandateBudget: bigint; bucketAvailable: number };
+  hitlApprovals: { notionalUsdc: bigint; reason: string; approved: boolean }[];
+  spawningRevoked: boolean;
+  revokeTxHash?: string;
+}
+
 const SHORT = (h?: string) => (h ? `${h.slice(0, 6)}…${h.slice(-4)}` : "");
 const usdc = (v: bigint) => `$${(Number(v) / 1e6).toFixed(2)}`;
 
@@ -308,6 +327,40 @@ export class AgentSessionStore {
       revoked: this.spawningRevoked,
       ...(this.revokeTxHash ? { revokeTxHash: this.revokeTxHash } : {}),
     };
+  }
+
+  /**
+   * Capture the session view as a serializable {@link SessionSnapshot} for persistence.
+   * Activity/usage are capped so the stored payload stays bounded. Pure read.
+   */
+  snapshot(): SessionSnapshot {
+    return {
+      phase: this.phase,
+      master: { ...this.master },
+      children: this.children.map((c) => ({ ...c })),
+      activity: this.activity.slice(-500).map((a) => ({ ...a })),
+      routes: { ...this.routes },
+      inferenceUsage: this.inferenceUsage.slice(-500).map((u) => ({ ...u })),
+      ...(this.authority ? { authority: { ...this.authority } } : {}),
+      hitlApprovals: this.hitlApprovals.map((h) => ({ ...h })),
+      spawningRevoked: this.spawningRevoked,
+      ...(this.revokeTxHash ? { revokeTxHash: this.revokeTxHash } : {}),
+    };
+  }
+
+  /** Re-apply a persisted snapshot so every panel renders a past session (read-only). */
+  restore(s: SessionSnapshot): void {
+    this.reset(s.master.description, s.master.rootMandateId);
+    this.phase = s.phase;
+    this.master = { ...s.master };
+    this.children = s.children.map((c) => ({ ...c }));
+    this.activity = s.activity.map((a) => ({ ...a }));
+    this.routes = { ...s.routes };
+    this.inferenceUsage = s.inferenceUsage.map((u) => ({ ...u }));
+    this.authority = s.authority ? { ...s.authority } : undefined;
+    this.hitlApprovals = s.hitlApprovals.map((h) => ({ ...h }));
+    this.spawningRevoked = s.spawningRevoked;
+    this.revokeTxHash = s.revokeTxHash;
   }
 
   /** Append an informational activity line (e.g. live pre-trade quote telemetry). */

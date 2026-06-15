@@ -24,11 +24,13 @@
   import { privateKeyToAccount } from "viem/accounts";
   import { X402_INFERENCE_URL, X402_ASSET_TRANSFER_METHOD } from "$lib/flags";
   import { ensureSessionDelegated } from "$lib/agent/session-7702";
-  import { liveCommitAudit, liveCommitAuditWithSig, requestAuditCommitSignature } from "$lib/agent/audit-commit";
+  import { liveCommitAudit, liveCommitAuditWithSig, requestAuditCommitSignature, commitAuditViaOneShot } from "$lib/agent/audit-commit";
+  import { oneShotTauriFetch } from "$lib/tauri-fetch";
   import { buildTransport } from "$lib/agent/transport";
   import { veniceKill } from "$lib/stores/venice.svelte";
   import { TauriKeyStore } from "$lib/key-store";
   import { customAgents, toDefinition } from "$lib/stores/custom-agents.svelte";
+  import { sessions, type StoredSession } from "$lib/stores/sessions.svelte";
   import {
     Compiler,
     renderSpec,
@@ -57,6 +59,7 @@
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Play from "@lucide/svelte/icons/play";
   import Plus from "@lucide/svelte/icons/plus";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
 
   const store = new AgentSessionStore();
 
@@ -76,6 +79,10 @@
 
   // Empty until a workflow is handed off from the master-agent chat — no demo stub.
   let workflow = $state("");
+
+  // The persisted session currently loaded in the runtime (its spec + audit trail live
+  // in the `sessions` store so it survives navigation and can be re-run directly).
+  let currentSessionId = $state<string | undefined>(undefined);
 
   // Executor (HITL demo): when on, a spawned executor runs the real preflight + HITL
   // gate against a simulated swap of this notional. Above the HITL threshold ⇒ it pauses.
@@ -134,6 +141,9 @@
     walletId: string;
     walletAddress: `0x${string}`;
     swapMethodId: string;
+    businessId: string;
+    /** Registered 1Shot method id for AuditRegistry.commit — enables gas-sponsored anchoring (#4). */
+    auditMethodId: string;
   };
   let demo = $state<DemoCreds | null>(null);
   let liveRootMandateId = $state<`0x${string}` | undefined>(undefined);
@@ -154,6 +164,7 @@
       const c = await invoke<{
         sessionKey?: string; rpcUrl?: string; apiKey?: string; apiSecret?: string;
         walletId?: string; walletAddress?: string; swapMethodId?: string;
+        businessId?: string; auditMethodId?: string;
       }>("load_demo_credentials");
       if (!c.sessionKey) {
         demo = null;
@@ -167,6 +178,8 @@
         walletId: c.walletId ?? "",
         walletAddress: (c.walletAddress ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
         swapMethodId: c.swapMethodId ?? "",
+        businessId: c.businessId ?? "",
+        auditMethodId: c.auditMethodId ?? "",
       };
       // Rebuild the transport next time so the x402 paid leg picks up the session key.
       transportRef = undefined;
@@ -198,6 +211,72 @@
   function newSession() {
     chats.newChat();
     goto("/chat");
+  }
+
+  /**
+   * Pre-baked demo: load a canonical cross-DEX WETH→USDC workflow + a ready spec
+   * directly here, skipping /chat and the NL→spec compile (and its inference call).
+   * Lets you hit Run immediately. The run cycle's planner still needs inference.
+   */
+  function loadDemo() {
+    workflow =
+      "Swap 0.001 WETH to USDC on Base. Compare quotes across Uniswap v3 and " +
+      "Paraswap, take the best route, and keep slippage under 0.5%. Post the " +
+      "result to Discord. Pause for my approval on any single trade over $5.";
+    compiledSpec = buildSpec();
+    compileResult = undefined;
+    answers = {};
+    review = safeRender(compiledSpec);
+    store.reset(compiledSpec.description);
+    currentSessionId = undefined;
+    rememberSession();
+  }
+
+  /** Persist the loaded spec so the session shows in the panel and is re-runnable. */
+  function rememberSession() {
+    if (!compiledSpec) return;
+    currentSessionId = sessions.upsert({
+      ...(currentSessionId ? { id: currentSessionId } : {}),
+      workflow,
+      spec: compiledSpec,
+    });
+  }
+
+  /** Load a saved session: its spec (to re-run) + its persisted audit trail (read-only). */
+  function selectSession(id: string) {
+    const s = sessions.get(id);
+    if (!s) return;
+    currentSessionId = id;
+    workflow = s.workflow;
+    compiledSpec = $state.snapshot(s.spec) as CompiledSpec;
+    compileResult = undefined;
+    answers = {};
+    review = safeRender(compiledSpec);
+    if (s.run) store.restore($state.snapshot(s.run.snapshot));
+    else store.reset(compiledSpec.description);
+    activeTab = "tree";
+  }
+
+  function deleteSession(id: string) {
+    sessions.remove(id);
+    if (id === currentSessionId) {
+      currentSessionId = undefined;
+      compiledSpec = undefined;
+      compileResult = undefined;
+      workflow = "";
+      review = [];
+      store.reset("");
+    }
+  }
+
+  /** Phase shown on a session card: the live phase for the loaded one, else its saved phase. */
+  function sessionPhase(s: StoredSession): string {
+    if (s.id === currentSessionId) return store.phase;
+    return s.run ? s.run.snapshot.phase : "draft";
+  }
+  function sessionAgents(s: StoredSession): number {
+    if (s.id === currentSessionId) return store.agentsTotal;
+    return s.run?.snapshot.children.length ?? 0;
   }
 
   function execNotional(): bigint {
@@ -261,7 +340,9 @@
         return { params: { ...baseParams, fee: "3000", amountOutMinimum: "0" } };
       };
       return makeExecutorRunner({
-        oneShot: { apiKey: demo.apiKey, apiSecret: demo.apiSecret, walletId: demo.walletId },
+        // fetchImpl routes the 1Shot REST calls through Rust (Tauri HTTP) — the webview
+        // fetch fails CORS against the 1Shot API ("Failed to fetch"); see tauri-fetch.ts.
+        oneShot: { apiKey: demo.apiKey, apiSecret: demo.apiSecret, walletId: demo.walletId, fetchImpl: oneShotTauriFetch },
         contractMethodId: demo.swapMethodId,
         swap: {
           target: BASE_SEPOLIA_SWAP_ROUTER_02,
@@ -357,7 +438,35 @@
     committing = true;
     commitError = undefined;
     try {
-      if (demo) {
+      if (demo && demo.auditMethodId && demo.apiKey && demo.walletId) {
+        // GAS-SPONSORED anchor (#4): submit AuditRegistry.commit through the 1Shot server
+        // wallet — 1Shot pays gas, so the session key needs no ETH. Routed via Tauri HTTP
+        // (no webview CORS). Falls back to the session-key path on any error.
+        try {
+          const r = await commitAuditViaOneShot({
+            oneShot: { apiKey: demo.apiKey, apiSecret: demo.apiSecret, walletId: demo.walletId, methodId: demo.auditMethodId },
+            sessionId: receipt.sessionId as `0x${string}`,
+            merkleRoot: receipt.merkleRoot as `0x${string}`,
+            sessionEnd: BigInt(Math.floor(Date.now() / 1000)),
+            fetchImpl: oneShotTauriFetch,
+          });
+          commitTx = r.txHash ?? r.transactionId;
+          commitSimulated = false;
+          commitCommitter = demo.walletAddress; // the 1Shot server wallet is the committer
+          store.note(`Audit committed via 1Shot (gas-sponsored) — ${r.status}`);
+        } catch (e) {
+          store.note(`1Shot audit commit failed (${e instanceof Error ? e.message : String(e)}); using session key.`);
+          commitTx = await liveCommitAudit({
+            sessionPrivateKey: demo.sessionKey,
+            rpcUrl: demo.rpcUrl,
+            sessionId: receipt.sessionId as `0x${string}`,
+            merkleRoot: receipt.merkleRoot as `0x${string}`,
+            sessionEnd: BigInt(Math.floor(Date.now() / 1000)),
+          });
+          commitSimulated = false;
+          commitCommitter = demo.walletAddress;
+        }
+      } else if (demo) {
         // LIVE anchor on Base Sepolia via the funded session key → AuditRegistry.commit.
         commitTx = await liveCommitAudit({
           sessionPrivateKey: demo.sessionKey,
@@ -420,13 +529,7 @@
   let compiledSpec = $state<CompiledSpec | undefined>(undefined);
   let review = $state<string[]>([]);
   let answers = $state<Record<string, string>>({});
-  /** A session exists only once a workflow has been handed off + compiled here. */
-  const hasSession = $derived(!!compiledSpec || store.phase !== "idle" || store.children.length > 0);
 
-  function toggleVenice() {
-    primaryEnabled = !primaryEnabled;
-    switcher?.setPrimaryEnabled(primaryEnabled);
-  }
 
   /**
    * Build the shared thinking transport ONCE so the budget spans compile + planning.
@@ -509,6 +612,7 @@
         }
         // Size the swap leg to the workflow's budget (e.g. "swap 50 USDC").
         if (h.spec.spendCapTotal) execNotionalStr = String(Number(h.spec.spendCapTotal) / 1e6);
+        rememberSession();
         if (config.ready && !(h.compileResult?.escalateToHITL ?? false)) run();
       } else if (config.ready) {
         await compile();
@@ -539,6 +643,7 @@
       compileResult = result;
       compiledSpec = result.spec;
       review = result.escalateToHITL ? [] : safeRender(result.spec);
+      if (!result.escalateToHITL) rememberSession();
     } catch (e) {
       compileResult = undefined;
       compiledSpec = undefined;
@@ -568,6 +673,7 @@
     pending = true;
     lastResultText = "";
     const spec = compiledSpec ?? buildSpec();
+    rememberSession(); // ensure this run's session is persisted + listed before it starts
     store.beginCycle(spec.description); // preserves revocation across cycles
     activeTab = "tree"; // snap to the camera anchor while agents are live
     // Track which stage we're in so a failure names the exact culprit, not just "error".
@@ -648,17 +754,20 @@
       store.markError(`cycle failed at "${stage}"`, e);
     } finally {
       pending = false;
+      // Persist this run's full audit trail so it survives navigation / reload (#permanent
+      // audit trail). Even an errored cycle is recorded — its activity log is part of the trail.
+      if (currentSessionId) sessions.saveRun(currentSessionId, store.snapshot());
     }
   }
 
   const usdc = (v?: bigint) => (v === undefined ? "—" : `$${(Number(v) / 1e6).toFixed(2)}`);
   const shortHash = (h: string) => (h.length > 14 ? `${h.slice(0, 8)}…${h.slice(-6)}` : h);
-  const phaseBadge = (): "default" | "secondary" | "outline" | "destructive" =>
-    store.phase === "error" || store.phase === "escalated"
+  const badgeVariant = (phase: string): "default" | "secondary" | "outline" | "destructive" =>
+    phase === "error" || phase === "escalated"
       ? "destructive"
-      : store.phase === "done"
+      : phase === "done"
         ? "secondary"
-        : store.phase === "idle"
+        : phase === "idle" || phase === "draft"
           ? "outline"
           : "default";
 </script>
@@ -680,45 +789,59 @@
       </Tooltip.Root>
     </div>
 
-    {#if hasSession}
-      <div class="rounded-xl border bg-background/40 p-3">
-        <div class="flex items-center justify-between gap-2">
-          <button type="button" class="min-w-0 flex-1 text-left" onclick={() => (activeTab = "tree")}>
-            <div class="flex items-center justify-between gap-2">
-              <span class="font-medium">Session #1</span>
-              <Badge variant={phaseBadge()}>{store.phase}</Badge>
-            </div>
-            <p class="mt-1 line-clamp-3 text-xs text-muted-foreground">{store.master.description || workflow}</p>
-          </button>
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              {#snippet child({ props })}
-                <Button {...props} size="icon" variant="ghost" class="size-7 shrink-0" onclick={run} disabled={pending || compiling || !config.ready || !compiledSpec}>
-                  {#if pending}<Loader2 class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
-                </Button>
-              {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content side="right">Run this session</Tooltip.Content>
-          </Tooltip.Root>
-        </div>
-        <div class="mt-2 flex gap-3 text-[10px] text-muted-foreground">
-          <span>{store.agentsTotal} agents</span>
-          <span>{store.agentsRunning} running</span>
-          <span>{store.agentsDone} done</span>
-        </div>
-      </div>
-    {:else}
+    {#if sessions.list.length === 0}
       <div class="flex flex-1 flex-col items-center justify-center gap-3 px-2 text-center">
-        <p class="text-xs text-muted-foreground">No active session.</p>
+        <p class="text-xs text-muted-foreground">No saved sessions.</p>
         <p class="text-[11px] text-muted-foreground/80">Create a workflow in the master-agent chat, then run it from there or here.</p>
         <Button href="/chat" size="sm" variant="secondary"><Plus class="size-3.5" /> New workflow</Button>
+        <Button size="sm" variant="outline" onclick={loadDemo}><Play class="size-3.5" /> Load demo workflow</Button>
+        <p class="text-[10px] text-muted-foreground/70">Pre-baked WETH→USDC cross-DEX run — skips chat &amp; compile.</p>
       </div>
-    {/if}
-
-    {#if hasSession}
-      <p class="mt-auto px-1 text-[10px] text-muted-foreground">
-        Multi-session queue, condition triggers and refill cycles land here next.
-      </p>
+    {:else}
+      <div class="flex flex-col gap-2">
+        {#each sessions.list as s (s.id)}
+          <div class="rounded-xl border p-3 {s.id === currentSessionId ? 'border-primary/60 bg-primary/5' : 'bg-background/40'}">
+            <div class="flex items-start justify-between gap-2">
+              <button type="button" class="min-w-0 flex-1 text-left" onclick={() => selectSession(s.id)}>
+                <div class="flex items-center justify-between gap-2">
+                  <span class="truncate font-medium">{s.title}</span>
+                  <Badge variant={badgeVariant(sessionPhase(s))}>{sessionPhase(s)}</Badge>
+                </div>
+                <p class="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{s.workflow}</p>
+              </button>
+              <div class="flex shrink-0 flex-col gap-1">
+                <Tooltip.Root>
+                  <Tooltip.Trigger>
+                    {#snippet child({ props })}
+                      <Button {...props} size="icon" variant="ghost" class="size-7" onclick={() => { selectSession(s.id); run(); }} disabled={pending || compiling || !config.ready}>
+                        {#if pending && s.id === currentSessionId}<Loader2 class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
+                      </Button>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  <Tooltip.Content side="right">Run this session</Tooltip.Content>
+                </Tooltip.Root>
+                <Tooltip.Root>
+                  <Tooltip.Trigger>
+                    {#snippet child({ props })}
+                      <Button {...props} size="icon" variant="ghost" class="size-7 text-muted-foreground hover:text-destructive" onclick={() => deleteSession(s.id)}>
+                        <Trash2 class="size-3.5" />
+                      </Button>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  <Tooltip.Content side="right">Delete session</Tooltip.Content>
+                </Tooltip.Root>
+              </div>
+            </div>
+            <div class="mt-2 flex gap-3 text-[10px] text-muted-foreground">
+              <span>{sessionAgents(s)} agents</span>
+              {#if s.run}<span>audit saved</span>{/if}
+            </div>
+          </div>
+        {/each}
+        <Button size="sm" variant="ghost" class="mt-1 justify-start text-muted-foreground" onclick={loadDemo}>
+          <Play class="size-3.5" /> Load demo workflow
+        </Button>
+      </div>
     {/if}
   </aside>
 
@@ -955,14 +1078,11 @@
       </div>
 
       {#if config.value.veniceApiKey}
-        <div class="flex items-center justify-between gap-2 rounded-xl border bg-background/40 p-3 text-xs">
-          <div>
-            <p class="font-medium">Paid inference (Venice x402)</p>
-            <p class="text-[10px] text-muted-foreground">{store.routes.venice} paid · {store.routes.openrouter} fallback</p>
-          </div>
-          <Button variant={primaryEnabled ? "default" : "outline"} size="sm" class="h-7" onclick={toggleVenice}>
-            {primaryEnabled ? "On" : "Off"}
-          </Button>
+        <div class="rounded-xl border bg-background/40 p-3 text-xs">
+          <p class="font-medium">Paid inference (Venice x402)</p>
+          <p class="text-[10px] text-muted-foreground">
+            {store.routes.venice} paid · {store.routes.openrouter} fallback — toggle in the title bar
+          </p>
         </div>
       {/if}
     </section>
