@@ -1,5 +1,6 @@
 import { requestMetaMaskGrant, type MetaMaskGrantOptions } from "$lib/agent/metamask-issuer";
 import { config } from "$lib/stores/config.svelte";
+import { grants } from "$lib/stores/grants.svelte";
 import { RelayerClient } from "@frost/agent/browser";
 
 /**
@@ -177,5 +178,26 @@ export async function captureMetaMaskAuthority(): Promise<{ granter?: string; se
     grantMaxAmount: auth.periodAmount,
     grantExpiryUnix: auth.expiryUnix,
   });
+  recordGrant(auth);
   return { granter: granterAddressOf(auth.granted, auth.sessionAccount), sessionAccount: auth.sessionAccount };
+}
+
+/** Append a captured grant to the (synced) delegation history — metadata only, no context. */
+export function recordGrant(auth: {
+  sessionAccount: string;
+  tokenAddress: string;
+  periodAmount: string;
+  periodSecs: number;
+  expiryUnix: number;
+}): void {
+  const isUsdc = auth.tokenAddress.toLowerCase() === GRANT_TOKEN.toLowerCase();
+  grants.record({
+    label: "Spending grant (ERC-7715)",
+    delegate: auth.sessionAccount,
+    tokenAddress: auth.tokenAddress,
+    ...(isUsdc ? { tokenSymbol: "USDC" } : {}),
+    capBaseUnits: auth.periodAmount,
+    periodSecs: auth.periodSecs,
+    expiryUnix: auth.expiryUnix,
+  });
 }

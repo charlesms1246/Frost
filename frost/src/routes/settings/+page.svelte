@@ -1,40 +1,42 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { untrack } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import * as Card from "$lib/components/ui/card";
-  import { theme } from "$lib/stores/theme.svelte";
+  import * as Tooltip from "$lib/components/ui/tooltip";
+  import ModelCombobox from "$lib/components/ModelCombobox.svelte";
   import { config, type ProviderId } from "$lib/stores/config.svelte";
-  import Sun from "@lucide/svelte/icons/sun";
-  import Moon from "@lucide/svelte/icons/moon";
-  import Code from "@lucide/svelte/icons/code";
-  import Wallet from "@lucide/svelte/icons/wallet";
+  import { fetchModelCatalog, type CatalogProvider } from "$lib/agent/model-catalog";
   import Loader2 from "@lucide/svelte/icons/loader-2";
+  import ListChecks from "@lucide/svelte/icons/list-checks";
 
   // Local mirror of the persisted config — edits save live via config.update().
   const c = config.value;
-  let discordWebhookUrl = $state(c.discordWebhookUrl);
-  let rpcUrl = $state(c.rpcUrl);
-  let basescanApiKey = $state(c.basescanApiKey);
+  let veniceApiKey = $state(c.veniceApiKey);
+  let veniceModels = $state<[string, string, string]>([...c.veniceModels]);
+  let veniceCallBudgetStr = $state(String(c.veniceCallBudget));
   let fallbackProvider = $state<ProviderId>(c.fallbackProvider);
   let openRouterApiKey = $state(c.openRouterApiKey);
   let groqApiKey = $state(c.groqApiKey);
-  let fallbackModel = $state(c.fallbackModels[0]);
-  let veniceApiKey = $state(c.veniceApiKey);
-  let veniceModel = $state(c.veniceModels[0]);
-  let veniceCallBudgetStr = $state(String(c.veniceCallBudget));
+  let fallbackModels = $state<[string, string, string]>([...c.fallbackModels]);
+  let discordWebhookUrl = $state(c.discordWebhookUrl);
+  let commsEmail = $state(c.commsEmail);
+  let rpcUrl = $state(c.rpcUrl);
+  let basescanApiKey = $state(c.basescanApiKey);
 
-  const signingAddr = $derived(config.value.signingWalletAddress);
-  const ZERO = "0x0000000000000000000000000000000000000000";
-  const hasSigning = $derived(!!signingAddr && signingAddr !== ZERO);
-
-  // Persist helpers — each field writes straight to the config store on change.
-  const saveFallbackModel = () =>
-    config.update({ fallbackModels: [fallbackModel, c.fallbackModels[1], c.fallbackModels[2]] });
-  const saveVeniceModel = () =>
-    config.update({ veniceModels: [veniceModel, c.veniceModels[1], c.veniceModels[2]] });
+  // Models persist on change (ModelCombobox is bind-only). The write goes through
+  // `untrack` so `config.update`'s internal read of the store's state isn't tracked
+  // as a dependency of THIS effect — otherwise the read→write cycle on the same
+  // state throws `effect_update_depth_exceeded` and freezes the page's inputs.
+  $effect(() => {
+    const m: [string, string, string] = [veniceModels[0], veniceModels[1], veniceModels[2]];
+    untrack(() => config.update({ veniceModels: m }));
+  });
+  $effect(() => {
+    const m: [string, string, string] = [fallbackModels[0], fallbackModels[1], fallbackModels[2]];
+    untrack(() => config.update({ fallbackModels: m }));
+  });
   function saveBudget() {
     const n = Number(veniceCallBudgetStr);
     if (Number.isFinite(n) && n >= 0) config.update({ veniceCallBudget: Math.floor(n) });
@@ -44,140 +46,159 @@
     config.update({ fallbackProvider: p });
   }
 
-  let provisioning = $state(false);
-  async function provisionSigning() {
-    if (provisioning) return;
-    provisioning = true;
+  // Live model catalogs (pick from the provider's list, don't hand-type model ids).
+  const fallbackKey = $derived(fallbackProvider === "groq" ? groqApiKey : openRouterApiKey);
+  let veniceModelOpts = $state<string[]>([]);
+  let fallbackModelOpts = $state<string[]>([]);
+  let loadingModels = $state<"venice" | "fallback" | "">("");
+  let modelError = $state("");
+  async function loadModels(which: "venice" | "fallback") {
+    loadingModels = which;
+    modelError = "";
     try {
-      const demo = await invoke<{ walletAddress?: string; walletId?: string }>("load_demo_credentials");
-      if (demo?.walletAddress && /^0x[0-9a-fA-F]{40}$/.test(demo.walletAddress) && demo.walletAddress !== ZERO) {
-        config.update({
-          signingWalletAddress: demo.walletAddress,
-          ...(demo.walletId ? { signingWalletId: demo.walletId } : {}),
-        });
-      }
-    } catch {
-      /* no demo creds — packaged build */
+      const provider: CatalogProvider = which === "venice" ? "venice" : fallbackProvider;
+      const key = which === "venice" ? veniceApiKey : fallbackKey;
+      const ids = (await fetchModelCatalog(provider, key)).map((m) => m.id);
+      if (which === "venice") veniceModelOpts = ids;
+      else fallbackModelOpts = ids;
+      if (ids.length === 0) modelError = `${provider} returned no models.`;
+    } catch (e) {
+      modelError = e instanceof Error ? e.message : String(e);
     } finally {
-      provisioning = false;
+      loadingModels = "";
     }
   }
 </script>
 
-<div class="mx-auto max-w-3xl px-6 py-6">
-  <header class="mb-6">
-    <h1 class="text-xl font-semibold tracking-tight">Settings</h1>
-    <p class="text-sm text-muted-foreground">App preferences and configuration — changes save automatically.</p>
+<div class="flex h-[calc(100vh-36px)] flex-col gap-3 overflow-hidden p-4">
+  <header class="shrink-0">
+    <h1 class="text-lg font-semibold tracking-tight">Settings</h1>
+    <p class="text-xs text-muted-foreground">Inference, comms and chain config — changes save automatically.</p>
   </header>
 
-  <div class="flex flex-col gap-4">
-    <!-- Appearance -->
-    <Card.Root>
-      <Card.Header class="pb-3"><Card.Title class="text-base">Appearance</Card.Title></Card.Header>
-      <Card.Content class="flex gap-2">
-        <Button variant={theme.value === "light" ? "default" : "outline"} size="sm" onclick={() => theme.set("light")}>
-          <Sun class="size-4" /> Light
-        </Button>
-        <Button variant={theme.value === "dark" ? "default" : "outline"} size="sm" onclick={() => theme.set("dark")}>
-          <Moon class="size-4" /> Dark
-        </Button>
+  <!-- Bento grid: the two inference providers are the hero tiles; comms + chain config below. -->
+  <div class="grid min-h-0 flex-1 grid-cols-4 grid-rows-3 gap-3">
+    <!-- Primary inference: Venice (x402) -->
+    <Card.Root size="sm" class="col-span-2 row-span-2 min-h-0 gap-2 py-3">
+      <Card.Header class="pb-0">
+        <Card.Title>Primary inference · Venice <span class="text-muted-foreground">(x402)</span></Card.Title>
+        <Card.Description class="text-[11px]">Pay-per-call. The first N calls (budget) route here, then fall back.</Card.Description>
+      </Card.Header>
+      <Card.Content class="flex min-h-0 flex-1 flex-col gap-2">
+        <div class="grid gap-1">
+          <Label for="venice-key" class="text-xs">Venice API key</Label>
+          <Input id="venice-key" type="password" class="h-8" bind:value={veniceApiKey} onchange={() => config.update({ veniceApiKey })} placeholder="empty = Venice off" />
+        </div>
+        <div class="grid gap-1">
+          <div class="flex items-center justify-between">
+            <Label class="text-xs">Models — order of preference</Label>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  <Button {...props} type="button" variant="ghost" size="sm" class="h-6 px-2 text-xs" onclick={() => loadModels("venice")} disabled={loadingModels !== "" || !veniceApiKey.trim()}>
+                    {#if loadingModels === "venice"}<Loader2 class="size-3.5 animate-spin" />{:else}<ListChecks class="size-3.5" />{/if}
+                    Load
+                  </Button>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content side="bottom">Load models from provider</Tooltip.Content>
+            </Tooltip.Root>
+          </div>
+          {#each [0, 1, 2] as i (i)}
+            <ModelCombobox bind:value={veniceModels[i]} options={veniceModelOpts} placeholder={i === 0 ? "primary model" : `choice ${i + 1} (optional)`} />
+          {/each}
+        </div>
+        <div class="flex items-end justify-between gap-2">
+          <div class="grid w-28 gap-1">
+            <Label for="budget" class="text-xs">Call budget</Label>
+            <Input id="budget" type="number" min="0" class="h-8" bind:value={veniceCallBudgetStr} onchange={saveBudget} />
+          </div>
+          {#if veniceModelOpts.length > 0}<p class="text-[10px] text-muted-foreground">{veniceModelOpts.length} models</p>{/if}
+        </div>
+        {#if modelError}<p class="text-[10px] break-all text-destructive">{modelError}</p>{/if}
       </Card.Content>
     </Card.Root>
 
-    <!-- Inference -->
-    <Card.Root>
-      <Card.Header class="pb-3">
-        <Card.Title class="text-base">Inference</Card.Title>
-        <Card.Description>The thinking path. Fallback runs when Venice is off/over budget.</Card.Description>
-      </Card.Header>
-      <Card.Content class="grid gap-4">
-        <div class="grid gap-1.5">
-          <Label>Fallback provider</Label>
-          <div class="flex gap-2">
-            <Button variant={fallbackProvider === "openrouter" ? "default" : "outline"} size="sm" onclick={() => setProvider("openrouter")}>OpenRouter</Button>
-            <Button variant={fallbackProvider === "groq" ? "default" : "outline"} size="sm" onclick={() => setProvider("groq")}>Groq</Button>
+    <!-- Fallback inference: OpenRouter / Groq -->
+    <Card.Root size="sm" class="col-span-2 row-span-2 min-h-0 gap-2 py-3">
+      <Card.Header class="pb-0">
+        <div class="flex items-center justify-between gap-2">
+          <Card.Title>Fallback inference</Card.Title>
+          <div class="flex gap-1.5">
+            <Button variant={fallbackProvider === "openrouter" ? "default" : "outline"} size="sm" class="h-7" onclick={() => setProvider("openrouter")}>OpenRouter</Button>
+            <Button variant={fallbackProvider === "groq" ? "default" : "outline"} size="sm" class="h-7" onclick={() => setProvider("groq")}>Groq</Button>
           </div>
         </div>
+        <Card.Description class="text-[11px]">Used when Venice is unavailable or over budget.</Card.Description>
+      </Card.Header>
+      <Card.Content class="flex min-h-0 flex-1 flex-col gap-2">
         {#if fallbackProvider === "openrouter"}
-          <div class="grid gap-1.5">
-            <Label for="or-key">OpenRouter API key</Label>
-            <Input id="or-key" type="password" bind:value={openRouterApiKey} onchange={() => config.update({ openRouterApiKey })} placeholder="sk-or-…" />
+          <div class="grid gap-1">
+            <Label for="or-key" class="text-xs">OpenRouter API key</Label>
+            <Input id="or-key" type="password" class="h-8" bind:value={openRouterApiKey} onchange={() => config.update({ openRouterApiKey })} placeholder="sk-or-…" />
           </div>
         {:else}
-          <div class="grid gap-1.5">
-            <Label for="groq-key">Groq API key</Label>
-            <Input id="groq-key" type="password" bind:value={groqApiKey} onchange={() => config.update({ groqApiKey })} placeholder="gsk_…" />
+          <div class="grid gap-1">
+            <Label for="groq-key" class="text-xs">Groq API key</Label>
+            <Input id="groq-key" type="password" class="h-8" bind:value={groqApiKey} onchange={() => config.update({ groqApiKey })} placeholder="gsk_…" />
           </div>
         {/if}
-        <div class="grid gap-1.5">
-          <Label for="fb-model">Fallback model</Label>
-          <Input id="fb-model" bind:value={fallbackModel} onchange={saveFallbackModel} placeholder="openai/gpt-4o-mini" class="font-mono text-xs" />
-        </div>
-        <div class="grid gap-1.5 border-t pt-4">
-          <Label for="venice-key">Venice API key (x402 paid path — optional)</Label>
-          <Input id="venice-key" type="password" bind:value={veniceApiKey} onchange={() => config.update({ veniceApiKey })} placeholder="leave empty to disable Venice" />
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div class="grid gap-1.5">
-            <Label for="venice-model">Venice model</Label>
-            <Input id="venice-model" bind:value={veniceModel} onchange={saveVeniceModel} placeholder="llama-3.3-70b" class="font-mono text-xs" />
+        <div class="grid gap-1">
+          <div class="flex items-center justify-between">
+            <Label class="text-xs">Models — order of preference</Label>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  <Button {...props} type="button" variant="ghost" size="sm" class="h-6 px-2 text-xs" onclick={() => loadModels("fallback")} disabled={loadingModels !== "" || (fallbackProvider === "groq" && !groqApiKey.trim())}>
+                    {#if loadingModels === "fallback"}<Loader2 class="size-3.5 animate-spin" />{:else}<ListChecks class="size-3.5" />{/if}
+                    Load
+                  </Button>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content side="bottom">Load models from provider</Tooltip.Content>
+            </Tooltip.Root>
           </div>
-          <div class="grid gap-1.5">
-            <Label for="budget">Venice call budget</Label>
-            <Input id="budget" type="number" min="0" bind:value={veniceCallBudgetStr} onchange={saveBudget} />
-          </div>
+          {#each [0, 1, 2] as i (i)}
+            <ModelCombobox bind:value={fallbackModels[i]} options={fallbackModelOpts} placeholder={i === 0 ? (fallbackProvider === "groq" ? "llama-3.3-70b-versatile" : "openai/gpt-4o-mini") : `choice ${i + 1} (optional)`} />
+          {/each}
         </div>
+        {#if fallbackModelOpts.length > 0}<p class="text-[10px] text-muted-foreground">{fallbackModelOpts.length} models</p>{/if}
       </Card.Content>
     </Card.Root>
 
-    <!-- Integrations -->
-    <Card.Root>
-      <Card.Header class="pb-3">
-        <Card.Title class="text-base">Integrations</Card.Title>
-        <Card.Description>Chain RPC, explorer, and notifications.</Card.Description>
+    <!-- Comms -->
+    <Card.Root size="sm" class="col-span-2 min-h-0 gap-2 py-3">
+      <Card.Header class="pb-0">
+        <Card.Title>Comms</Card.Title>
+        <Card.Description class="text-[11px]">Where your agents report in.</Card.Description>
       </Card.Header>
-      <Card.Content class="grid gap-4">
-        <div class="grid gap-1.5">
-          <Label for="rpc">Base Sepolia RPC URL</Label>
-          <Input id="rpc" bind:value={rpcUrl} onchange={() => config.update({ rpcUrl })} class="font-mono text-xs" />
+      <Card.Content class="grid min-h-0 flex-1 grid-cols-2 content-center gap-2">
+        <div class="grid gap-1">
+          <Label for="discord" class="text-xs">Discord webhook URL</Label>
+          <Input id="discord" type="password" class="h-8" bind:value={discordWebhookUrl} onchange={() => config.update({ discordWebhookUrl })} placeholder="https://discord.com/api/webhooks/…" />
         </div>
-        <div class="grid gap-1.5">
-          <Label for="discord">Discord webhook URL</Label>
-          <Input id="discord" type="password" bind:value={discordWebhookUrl} onchange={() => config.update({ discordWebhookUrl })} placeholder="https://discord.com/api/webhooks/…" />
-        </div>
-        <div class="grid gap-1.5">
-          <Label for="basescan">BaseScan API key (for contract_abi lookups)</Label>
-          <Input id="basescan" type="password" bind:value={basescanApiKey} onchange={() => config.update({ basescanApiKey })} placeholder="optional" />
+        <div class="grid gap-1">
+          <Label for="comms-email" class="text-xs">Email</Label>
+          <Input id="comms-email" type="email" class="h-8" bind:value={commsEmail} onchange={() => config.update({ commsEmail })} placeholder="you@example.com" />
         </div>
       </Card.Content>
     </Card.Root>
 
-    <!-- Signing wallet -->
-    <Card.Root>
-      <Card.Header class="pb-3">
-        <Card.Title class="flex items-center gap-2 text-base"><Wallet class="size-4 text-primary" /> Signing wallet</Card.Title>
-        <Card.Description>The agent's custodial 1Shot wallet that executes on-chain.</Card.Description>
+    <!-- Advanced -->
+    <Card.Root size="sm" class="col-span-2 min-h-0 gap-2 py-3">
+      <Card.Header class="pb-0">
+        <Card.Title>Advanced</Card.Title>
+        <Card.Description class="text-[11px]">Chain RPC and explorer.</Card.Description>
       </Card.Header>
-      <Card.Content class="flex items-center justify-between gap-3">
-        {#if hasSigning}
-          <span class="font-mono text-xs break-all">{signingAddr}</span>
-        {:else}
-          <span class="text-sm text-muted-foreground">Not provisioned.</span>
-        {/if}
-        <Button variant="outline" size="sm" onclick={provisionSigning} disabled={provisioning}>
-          {#if provisioning}<Loader2 class="size-4 animate-spin" />{/if}
-          {hasSigning ? "Refresh" : "Provision"}
-        </Button>
-      </Card.Content>
-    </Card.Root>
-
-    <!-- Developer -->
-    <Card.Root>
-      <Card.Header class="pb-3"><Card.Title class="text-base">Developer</Card.Title></Card.Header>
-      <Card.Content class="flex flex-wrap items-center gap-2">
-        <Button href="/agent" variant="outline" size="sm"><Code class="size-4" /> Agent debug</Button>
-        <Button href="/bridge" variant="outline" size="sm"><Code class="size-4" /> Wallet bridge</Button>
-        <span class="ml-auto text-[10px] text-muted-foreground">Frost v0.1.0 · Port-42 runtime</span>
+      <Card.Content class="grid min-h-0 flex-1 grid-cols-2 content-center gap-2">
+        <div class="grid gap-1">
+          <Label for="rpc" class="text-xs">Base Sepolia RPC URL</Label>
+          <Input id="rpc" class="h-8 font-mono text-xs" bind:value={rpcUrl} onchange={() => config.update({ rpcUrl })} />
+        </div>
+        <div class="grid gap-1">
+          <Label for="basescan" class="text-xs">BaseScan API key</Label>
+          <Input id="basescan" type="password" class="h-8" bind:value={basescanApiKey} onchange={() => config.update({ basescanApiKey })} placeholder="optional" />
+        </div>
       </Card.Content>
     </Card.Root>
   </div>

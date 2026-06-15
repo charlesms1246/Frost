@@ -24,6 +24,8 @@ export type ProviderId = "openrouter" | "groq";
 export type FrostConfig = {
 	// Comms
 	discordWebhookUrl: string;
+	/** Email the comms agent reports to (notifications / digests). */
+	commsEmail: string;
 	// Venice — PRIMARY x402 inference provider (key also serves RPC reads)
 	veniceApiKey: string;
 	veniceModels: [string, string, string];
@@ -55,6 +57,7 @@ const STORAGE_KEY = "frost.config";
 
 const DEFAULTS: FrostConfig = {
 	discordWebhookUrl: "",
+	commsEmail: "",
 	veniceApiKey: "",
 	veniceModels: ["llama-3.3-70b", "", ""],
 	veniceCallBudget: 3,

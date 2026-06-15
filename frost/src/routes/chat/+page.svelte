@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
   import { Button } from "$lib/components/ui/button";
+  import * as Tooltip from "$lib/components/ui/tooltip";
   import { Textarea } from "$lib/components/ui/textarea";
   import GradientBackdrop from "$lib/components/brand/GradientBackdrop.svelte";
   import Logo from "$lib/components/brand/Logo.svelte";
@@ -14,10 +15,13 @@
   import {
     connectMetaMaskAuthority,
     resolveRelayerTarget,
+    recordGrant,
+    granterAddressOf,
     GRANT_TOKEN,
     GRANT_PERIOD_SECS,
     GRANT_EXPIRY_SECS,
   } from "$lib/wallet-connect";
+  import { profile } from "$lib/stores/profile.svelte";
   import { Compiler, renderSpec } from "@frost/agent/browser";
   import type { CompiledSpec, CompileResult } from "@frost/agent/browser";
   import { FALLBACK_BASE_RPC_URL } from "$lib/flags";
@@ -65,14 +69,14 @@
 
   /** Render a read-tool step as a compact chat message. */
   function formatTool(step: Extract<MasterStep, { kind: "tool" }>): string {
-    return `${step.ok ? "🔧" : "⚠️"} ${step.tool}: ${step.summary}`;
+    return step.ok ? `${step.tool}: ${step.summary}` : `${step.tool} failed: ${step.summary}`;
   }
 
   /** Render a compile tool step as a chat message (byte-tied review + warnings). */
   function formatCompiled(step: Extract<MasterStep, { kind: "compiled" }>): string {
     const { result, review } = step;
     if (result.escalateToHITL) {
-      return `⚠️ I couldn't compile this safely: ${result.hitlReason ?? "the request was unclear or too broad"}.`;
+      return `I couldn't compile this safely: ${result.hitlReason ?? "the request was unclear or too broad"}.`;
     }
     const lines = ["Compiled — here's what you'd authorize:", ...review.map((r) => "• " + r)];
     if (result.warnings.length > 0) {
@@ -123,6 +127,11 @@
               grantMaxAmount: auth.periodAmount,
               grantExpiryUnix: auth.expiryUnix,
             });
+            recordGrant(auth);
+            // Record the granter as the user's wallet so the runtime's relayer executor
+            // can redeem this grant on-chain (a real USDC settlement under the authority).
+            const granter = granterAddressOf(auth.granted, auth.sessionAccount);
+            if (granter) profile.update({ walletAddress: granter });
             const per = periodSecs === 604_800 ? "week" : "day";
             return { ok: true, detail: `${Number(amountBaseUnits) / 1_000_000} USDC / ${per}` };
           } catch (e) {
@@ -166,7 +175,7 @@
     const status = (e as { status?: number })?.status;
     const body = (e as { body?: string })?.body;
     const base = e instanceof Error ? e.message : String(e);
-    const lines = [`⚠️ Inference failed: ${base}`];
+    const lines = [`Inference failed: ${base}`];
     if (body) lines.push(body.length > 300 ? body.slice(0, 300) + "…" : body);
     if (status === 429) {
       lines.push("Rate limited — wait a moment and retry (the provider's free tier is throttling).");
@@ -228,9 +237,16 @@
 
   <!-- Control bar: history toggle on the right, hovering over the gradient -->
   <div class="relative z-30 flex items-center justify-end gap-1 px-3 py-2">
-    <Button variant="ghost" size="icon" onclick={() => (showHistory = !showHistory)} aria-label="Toggle history" title="Chat history">
-      <PanelRight class="size-4" />
-    </Button>
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          <Button {...props} variant="ghost" size="icon" onclick={() => (showHistory = !showHistory)} aria-label="Toggle history" title="Chat history">
+            <PanelRight class="size-4" />
+          </Button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="bottom">Chat history</Tooltip.Content>
+    </Tooltip.Root>
   </div>
 
   <!-- Floating translucent history panel (hovers over the gradient, right side) -->
@@ -257,14 +273,22 @@
               <span class="block truncate">{c.title}</span>
               <span class="block text-[10px] text-muted-foreground">{relTime(c.createdAt)}</span>
             </button>
-            <button
-              type="button"
-              class="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
-              onclick={() => chats.remove(c.id)}
-              aria-label="Delete chat"
-            >
-              <Trash2 class="size-3.5" />
-            </button>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    type="button"
+                    class="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
+                    onclick={() => chats.remove(c.id)}
+                    aria-label="Delete chat"
+                  >
+                    <Trash2 class="size-3.5" />
+                  </button>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content side="bottom">Delete chat</Tooltip.Content>
+            </Tooltip.Root>
           </div>
         {/each}
       </div>

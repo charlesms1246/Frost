@@ -310,7 +310,7 @@ export class AgentSessionStore {
           if (e.detail) n.detail = e.detail;
           if (e.quote) n.quote = { label: e.quote.label, amountOutUsdc: BigInt(e.quote.amountOutUsdc) };
         }
-        this.log(e.ran ? "run" : "warn", `${e.role} ${e.ran ? "✓" : "✗"} ${e.detail ?? ""}`.trim());
+        this.log(e.ran ? "run" : "warn", `${e.role} ${e.ran ? "done" : "failed"}${e.detail ? " — " + e.detail : ""}`);
         break;
       }
       case "escalated": {

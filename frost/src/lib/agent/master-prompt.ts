@@ -13,7 +13,11 @@ export const MASTER_AGENT_PROMPT = `You are Frost's master agent — an assistan
 
 You can call TOOLS (listed below this prompt) to gather live information and to compile the goal into a signable spec. Read tools (e.g. price_quote, onchain_read, web_search, fetch_url, contract_abi, current_time) need no wallet — use them to look up facts. The special "compile" tool turns a one-sentence workflow into a signable spec plus any clarifications/warnings.
 
-If a task needs spending authority the user hasn't granted yet — e.g. it must spend more USDC per period than the current grant, or fund a swap — call tool="request_authority" with the {amount, period} you need. It opens MetaMask so the user can approve a scoped, revocable permission. Ask for the minimum the task needs, explain why in "say", and only call it when a read tool or compile result shows the existing budget is insufficient — never preemptively.
+SPENDING AUTHORITY IS MANDATORY FOR ANY VALUE-MOVING TASK. A swap, transfer, or any action that spends the user's tokens REQUIRES a scoped ERC-7715 delegation — Frost holds no keys and moves nothing without one. Do NOT silently assume a default budget and do NOT compile a spending workflow until the authority exists.
+- If the RUNTIME CONTEXT shows NO active grant (or its per-period cap is smaller than what the task needs), you MUST call tool="request_authority" with the {amount, period} the task needs BEFORE (or as soon as) it's clear the task moves value. Size "amount" to the task: derive it from the swap/spend the user described (look up a live price with price_quote if needed to size it), not a hardcoded guess; round up modestly for slippage. Explain in "say" what you're requesting and why.
+- request_authority opens MetaMask for the user to approve a human-readable, revocable permission. Only after it succeeds should you compile and tell the user it's ready to run.
+- If a sufficient active grant already exists, reuse it — don't re-request.
+Never just fill the workflow with default amounts/thresholds the user didn't give; ask or look them up, and gate spending on the delegation.
 
 RESPOND WITH A SINGLE JSON OBJECT — no prose outside it, no markdown:
 {
@@ -54,10 +58,17 @@ export function masterRuntimeContext(cfg: FrostConfig, veniceDisabled = false): 
     ? `Primary provider: ${primaryName}, model "${model}". Fallback provider: ${fallbackName}.`
     : `Provider: ${primaryName}, model "${model}".`;
   const discord = cfg.discordWebhookUrl.trim() !== "";
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const grantActive = cfg.metaMaskGrant != null && (!cfg.grantExpiryUnix || cfg.grantExpiryUnix > nowUnix);
+  const grantCapUsdc = cfg.grantMaxAmount ? (Number(cfg.grantMaxAmount) / 1e6).toFixed(2) : "0";
+  const authority = grantActive
+    ? `- Spending authority: an active ERC-7715 grant EXISTS, cap ~$${grantCapUsdc} USDC per period. Reuse it; only call request_authority if the task needs MORE than this cap.`
+    : "- Spending authority: NO active grant. Any swap/transfer/spend REQUIRES one — call request_authority (sized to the task) BEFORE compiling a value-moving workflow. Never assume a default budget.";
 
   const lines = [
     "RUNTIME CONTEXT (authoritative — use this, never speculate):",
     `- Inference: you run through Frost's own inference router. ${inference} If asked which model/provider you are, answer from this line; never claim to be OpenAI/gpt-4/OpenRouter unless named here.`,
+    authority,
     `- Comms: Discord webhook is ${discord ? "ALREADY configured — do NOT ask the user for a webhook URL; the post destination is Discord" : "NOT configured — if the workflow needs Discord, tell the user to add a webhook in Setup"}.`,
     veniceDisabled
       ? "- Note: Venice is currently OFF (cost control) — web_search and fetch_url are disabled; on-chain reads/quotes use a public RPC."

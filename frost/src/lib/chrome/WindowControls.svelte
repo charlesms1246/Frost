@@ -5,6 +5,7 @@
 	import Square from '@lucide/svelte/icons/square';
 	import Copy from '@lucide/svelte/icons/copy';
 	import X from '@lucide/svelte/icons/x';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isMacOS } from './platform';
 
 	const win = getCurrentWindow();
@@ -30,24 +31,45 @@
 
 {#if !isMacOS}
 	<div class="controls">
-		<button class="ctl" aria-label="Minimize" title="Minimize" onclick={() => win.minimize()}>
-			<Minus size={14} strokeWidth={2} />
-		</button>
-		<button
-			class="ctl"
-			aria-label={maximized ? 'Restore' : 'Maximize'}
-			title={maximized ? 'Restore' : 'Maximize'}
-			onclick={() => win.toggleMaximize()}
-		>
-			{#if maximized}
-				<Copy size={12} strokeWidth={2} />
-			{:else}
-				<Square size={12} strokeWidth={2} />
-			{/if}
-		</button>
-		<button class="ctl close" aria-label="Close" title="Close" onclick={() => win.close()}>
-			<X size={14} strokeWidth={2} />
-		</button>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<button {...props} class="ctl" aria-label="Minimize" onclick={() => win.minimize()}>
+						<Minus size={14} strokeWidth={2} />
+					</button>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content side="bottom">Minimize</Tooltip.Content>
+		</Tooltip.Root>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<button
+						{...props}
+						class="ctl"
+						aria-label={maximized ? 'Restore' : 'Maximize'}
+						onclick={() => win.toggleMaximize()}
+					>
+						{#if maximized}
+							<Copy size={12} strokeWidth={2} />
+						{:else}
+							<Square size={12} strokeWidth={2} />
+						{/if}
+					</button>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content side="bottom">{maximized ? 'Restore' : 'Maximize'}</Tooltip.Content>
+		</Tooltip.Root>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<button {...props} class="ctl close" aria-label="Close" onclick={() => win.close()}>
+						<X size={14} strokeWidth={2} />
+					</button>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content side="bottom">Close</Tooltip.Content>
+		</Tooltip.Root>
 	</div>
 {/if}
 

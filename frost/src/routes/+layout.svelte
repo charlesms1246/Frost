@@ -4,10 +4,13 @@
 	import TitleBar from '$lib/chrome/TitleBar.svelte';
 	import NavRail from '$lib/chrome/NavRail.svelte';
 	import WalletDelegateGate from '$lib/chrome/WalletDelegateGate.svelte';
+	import GradientBackdrop from '$lib/components/brand/GradientBackdrop.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import '$lib/stores/theme.svelte';
 	import { profile } from '$lib/stores/profile.svelte';
 	import { chats } from '$lib/stores/chats.svelte';
 	import { customAgents } from '$lib/stores/custom-agents.svelte';
+	import { grants } from '$lib/stores/grants.svelte';
 	import { cloudSession } from '$lib/cloud';
 
 	const { children } = $props();
@@ -19,6 +22,7 @@
 		void profile.value;
 		void chats.list;
 		void customAgents.list;
+		void grants.list;
 		if (cloudSession.signedIn) cloudSession.schedulePush();
 	});
 
@@ -33,23 +37,33 @@
 	);
 </script>
 
-{#if !noChrome}
-	<TitleBar />
-{/if}
-{#if showRail}
-	<NavRail />
-	<WalletDelegateGate />
-{/if}
+<!-- One app-wide Tooltip.Provider so any control can use Tooltip.Root/Trigger/Content. -->
+<Tooltip.Provider delayDuration={250}>
+	{#if showRail}
+		<GradientBackdrop fullscreen intensity="subtle" />
+	{/if}
+	{#if !noChrome}
+		<TitleBar />
+	{/if}
+	{#if showRail}
+		<NavRail />
+		<WalletDelegateGate />
+	{/if}
 
-<div class="app-shell" class:with-rail={showRail} class:no-chrome={noChrome}>
-	{@render children()}
-</div>
+	<div class="app-shell" class:with-rail={showRail} class:no-chrome={noChrome}>
+		{@render children()}
+	</div>
+</Tooltip.Provider>
 
 <style>
 	.app-shell {
+		position: relative;
+		z-index: 1;
 		min-height: 100vh;
 		padding-top: 36px;
-		background: var(--background);
+		/* Transparent so the fullscreen GradientBackdrop shows through (opaque cards
+		   keep page content readable). Splash/auth set their own background. */
+		background: transparent;
 		color: var(--foreground);
 	}
 	.app-shell.with-rail {

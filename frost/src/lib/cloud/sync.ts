@@ -3,19 +3,22 @@ import { profile } from "$lib/stores/profile.svelte";
 import { config } from "$lib/stores/config.svelte";
 import { chats, type Conversation } from "$lib/stores/chats.svelte";
 import { customAgents, type StoredAgent } from "$lib/stores/custom-agents.svelte";
+import { grants, type DelegationRecord } from "$lib/stores/grants.svelte";
 
 /**
  * The user data the desktop app round-trips with the hosted backend. NO secrets:
- * never the session key, never the live ERC-7715 grant — those are per-device and
+ * never the session key, never the live ERC-7715 grant blob — those are per-device and
  * re-established by re-delegating on a new device. The 1Shot signing wallet IS synced
  * (a custodial address + id, NO key) so the same agent wallet follows the user across
- * devices instead of re-provisioning a new one on each sign-in.
+ * devices instead of re-provisioning a new one on each sign-in. Delegation HISTORY is
+ * synced as metadata only (no redeemable context) so the grants list follows the user.
  */
 export type CloudUserData = {
   profile?: { displayName?: string; email?: string; avatarDataUrl?: string };
   signingWallet?: { address?: string; walletId?: string };
   chats?: Conversation[];
   automations?: StoredAgent[];
+  grants?: DelegationRecord[];
 };
 
 /** Snapshot the local stores into the cloud payload. */
@@ -38,6 +41,7 @@ export function collectLocalData(): CloudUserData {
       : {}),
     chats: chats.list,
     automations: customAgents.list,
+    grants: grants.list,
   };
 }
 
@@ -52,6 +56,7 @@ export function applyCloudData(data: CloudUserData): void {
   }
   if (Array.isArray(data.chats)) chats.hydrate(data.chats);
   if (Array.isArray(data.automations)) customAgents.hydrate(data.automations);
+  if (Array.isArray(data.grants)) grants.hydrate(data.grants);
 }
 
 /** Fetch this user's data and hydrate the local stores. Returns true if data existed. */

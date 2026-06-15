@@ -5,6 +5,7 @@ import type { FrostConfig } from "$lib/stores/config.svelte";
 function cfg(over: Partial<FrostConfig>): FrostConfig {
   return {
     discordWebhookUrl: "",
+    commsEmail: "",
     veniceApiKey: "",
     veniceModels: ["", "", ""],
     veniceCallBudget: 3,

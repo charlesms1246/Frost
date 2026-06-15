@@ -2,6 +2,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { config } from "$lib/stores/config.svelte";
 import { chats } from "$lib/stores/chats.svelte";
 import { customAgents } from "$lib/stores/custom-agents.svelte";
+import { grants } from "$lib/stores/grants.svelte";
 import { profile } from "$lib/stores/profile.svelte";
 import { cloudSession } from "$lib/cloud";
 import { TauriKeyStore } from "$lib/key-store";
@@ -85,6 +86,7 @@ export async function signOut(deps: SignOutDeps = {}): Promise<SignOutResult> {
   config.clear();
   chats.clearAll();
   customAgents.clearAll();
+  grants.clearAll();
   profile.clear();
   cloudSession.clear();
 

@@ -252,12 +252,12 @@ const TOOLS: MasterTool[] = [
   },
   {
     name: "discord_test",
-    description: "Send a FIXED test message ('Frost webhook test ✅') to the configured Discord webhook to verify it works. No args, no custom text.",
+    description: "Send a FIXED test message ('Frost webhook test') to the configured Discord webhook to verify it works. No args, no custom text.",
     run: async (_args, ctx) => {
       if (!ctx.discordWebhookUrl) return fail("No Discord webhook configured (add one in Setup → Comms).");
       const poster = new DiscordWebhookPoster(ctx.discordWebhookUrl, ctx.fetchImpl as never);
-      await poster.post("Frost webhook test ✅");
-      return { ok: true, summary: "sent test message to Discord", observation: "posted 'Frost webhook test ✅' to the configured webhook (mentions disabled)" };
+      await poster.post("Frost webhook test");
+      return { ok: true, summary: "sent test message to Discord", observation: "posted 'Frost webhook test' to the configured webhook (mentions disabled)" };
     },
   },
   {
