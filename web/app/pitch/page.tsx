@@ -17,7 +17,7 @@ type Slide = {
 
 const SLIDES: Slide[] = [
   {
-    kicker: "Port-42",
+    kicker: "Bounded autonomy",
     title: <>FROST</>,
     body: (
       <>
@@ -93,7 +93,7 @@ export default function PitchPage() {
       <div className="grid-bg" aria-hidden="true" />
 
       <header className="deck-top">
-        <Link className="brand" href="/">FROST<small>BY PORT 42</small></Link>
+        <Link className="brand" href="/">FROST</Link>
         <Link className="back-btn" href="/">Exit deck</Link>
       </header>
 

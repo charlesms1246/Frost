@@ -17,9 +17,10 @@ export type ReleaseAsset = {
   format: string; // e.g. ".dmg", "AppImage"
   label: string; // e.g. "Apple Silicon", "x64"
   size: string; // e.g. "5.3 MB"
+  sha256: string | null; // from the asset `digest` field, when GitHub provides it
 };
 
-type GhAsset = { name: string; browser_download_url: string; size: number };
+type GhAsset = { name: string; browser_download_url: string; size: number; digest?: string | null };
 type GhRelease = { tag_name: string; draft: boolean; assets: GhAsset[] };
 
 export type ReleaseInfo = {
@@ -35,7 +36,7 @@ function fmtSize(bytes: number): string {
 }
 
 // Map a release asset filename to its OS, human format, and arch label.
-function classify(name: string): Omit<ReleaseAsset, "name" | "url" | "size"> | null {
+function classify(name: string): Omit<ReleaseAsset, "name" | "url" | "size" | "sha256"> | null {
   const n = name.toLowerCase();
   const isArm = /aarch64|arm64/.test(n);
 
@@ -77,7 +78,8 @@ export function useRelease(): ReleaseInfo {
         for (const a of rel.assets) {
           const meta = classify(a.name);
           if (!meta) continue;
-          grouped[meta.os].push({ ...meta, name: a.name, url: a.browser_download_url, size: fmtSize(a.size) });
+          const sha256 = a.digest?.startsWith("sha256:") ? a.digest.slice("sha256:".length) : null;
+          grouped[meta.os].push({ ...meta, name: a.name, url: a.browser_download_url, size: fmtSize(a.size), sha256 });
         }
 
         setInfo({

@@ -7,10 +7,11 @@
 // Frosted-glass snowflake hero, partner strip, interactive lifecycle
 // walk-through, how-it-works, features, use cases, download banner, footer.
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import FrostOrb from "./_components/FrostOrb";
 import SiteNav from "./_components/SiteNav";
+import SiteFooter from "./_components/SiteFooter";
+import FaqList from "./_components/FaqList";
 import { useOS } from "./_lib/use-os";
 import { useRelease } from "./_lib/use-release";
 
@@ -61,7 +62,7 @@ export default function Home() {
   return (
     <>
       <div className="grid-bg" aria-hidden="true" />
-      <div className="meta-strip" aria-hidden="true">PORT-42 · MAINFRAME · BASE SEPOLIA</div>
+      <div className="meta-strip" aria-hidden="true">FROST · MAINFRAME · BASE SEPOLIA</div>
       <div className="meta-strip-l" aria-hidden="true">BUILD 0.1.0 · JUN 2026 · TAURI</div>
 
       <div className="shell home-shell">
@@ -115,51 +116,47 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ─── product detail ─── */}
-        <section className="detail detail-2" id="detail">
-          <div className="col col-left">
-            <div className="kicker">Desktop Application</div>
-            <h2 className="product-name">Frost<br />1.0</h2>
-            <div className="product-spec">Tauri · ~5 MB · macOS / Linux / Windows</div>
-            <div style={{ marginTop: "auto" }}>
-              <div className="label">Stack</div>
-              <ul className="stack-list" style={{ marginTop: 12 }}>
-                <li><span>Identity</span>MetaMask Smart Accounts</li>
-                <li><span>Authority</span>ERC-7710 redelegation</li>
-                <li><span>Settlement</span>x402 over USDC</li>
-                <li><span>Inference</span>Venice AI (native-x402)</li>
-                <li><span>Execution</span>1Shot API · private mempool</li>
-                <li><span>Audit</span>On-chain Merkle commitment</li>
-              </ul>
-            </div>
+        {/* ─── product showcase (centered) ─── */}
+        <section className="showcase" id="detail" aria-label="Inside Frost">
+          <div className="showcase-head">
+            <div className="section-eyebrow">Desktop Application</div>
+            <h2 className="showcase-title">Frost 1.0</h2>
+            <p className="showcase-lede">A native desktop app — Tauri 2, ~5 MB, for macOS, Windows, and Linux. Describe an automation in plain English and Frost compiles it into a signed, scoped, revocable on-chain mandate, then runs it while you walk away.</p>
           </div>
 
-          <div className="detail-stage">
-            {/* Real captures of the desktop app — placeholder for the demo
-                walk-through video, to be swapped in here later. */}
-            <figure className="shot-showcase">
-              <div className="shot-frame">
-                <img className="shot-img" src={shot.src} alt={shot.alt} loading="lazy" />
-              </div>
-              <figcaption className="shot-cap">
-                <span className="shot-cap-title">{shot.title}</span>
-                <span className="shot-cap-desc">{shot.desc}</span>
-              </figcaption>
-              <div className="shot-dots" role="tablist" aria-label="Screenshots">
-                {SHOTS.map((sh, i) => (
-                  <button
-                    key={sh.src}
-                    type="button"
-                    role="tab"
-                    className={`shot-dot${i === idx ? " active" : ""}`}
-                    aria-label={sh.title}
-                    aria-selected={i === idx}
-                    onClick={() => setIdx(i)}
-                  />
-                ))}
-              </div>
-            </figure>
-          </div>
+          {/* Real captures of the desktop app — placeholder for the demo
+              walk-through video, to be swapped in here later. */}
+          <figure className="shot-showcase showcase-media">
+            <div className="shot-frame">
+              <img className="shot-img" src={shot.src} alt={shot.alt} loading="lazy" />
+            </div>
+            <figcaption className="shot-cap">
+              <span className="shot-cap-title">{shot.title}</span>
+              <span className="shot-cap-desc">{shot.desc}</span>
+            </figcaption>
+            <div className="shot-dots" role="tablist" aria-label="Screenshots">
+              {SHOTS.map((sh, i) => (
+                <button
+                  key={sh.src}
+                  type="button"
+                  role="tab"
+                  className={`shot-dot${i === idx ? " active" : ""}`}
+                  aria-label={sh.title}
+                  aria-selected={i === idx}
+                  onClick={() => setIdx(i)}
+                />
+              ))}
+            </div>
+          </figure>
+
+          <ul className="showcase-stack">
+            <li><span>Identity</span>MetaMask Smart Accounts</li>
+            <li><span>Authority</span>ERC-7710 redelegation</li>
+            <li><span>Settlement</span>x402 over USDC</li>
+            <li><span>Inference</span>Venice AI (native-x402)</li>
+            <li><span>Execution</span>1Shot API · private mempool</li>
+            <li><span>Audit</span>On-chain Merkle commitment</li>
+          </ul>
         </section>
 
         {/* ─── how it works ─── */}
@@ -193,8 +190,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ─── features ─── */}
-        <section className="features" aria-label="Features">
+        {/* ─── features (dark highlight panel) ─── */}
+        <section className="features features--dark" aria-label="Features">
           <div className="features-header">
             <div>
               <div className="section-eyebrow" style={{ marginBottom: 16 }}>Capabilities</div>
@@ -267,6 +264,9 @@ export default function Home() {
           </div>
         </section>
 
+        {/* ─── faq ─── */}
+        <FaqList />
+
         {/* ─── download banner ─── */}
         <section className="dl-banner" id="download" aria-label="Download Frost">
           <h2 className="dl-title">Download<br />Frost 1.0</h2>
@@ -294,33 +294,7 @@ export default function Home() {
         </section>
 
         {/* ─── footer ─── */}
-        <footer className="site">
-          <div className="col">
-            <strong>Frost</strong>
-            <Link href="/">Product</Link>
-            <Link href="#">Pitch deck</Link>
-            <Link href="#">Build journal</Link>
-            <Link href="/download">Download</Link>
-          </div>
-          <div className="col">
-            <strong>Resources</strong>
-            <Link href="#">Port-42 architecture</Link>
-            <Link href="#">Threat model</Link>
-            <Link href="#">Contract specs</Link>
-            <Link href="#">Changelog</Link>
-          </div>
-          <div className="col">
-            <strong>Community</strong>
-            <Link href="#">Discord</Link>
-            <Link href="#">GitHub</Link>
-            <Link href="#">X / Twitter</Link>
-          </div>
-          <div className="col" style={{ textAlign: "right", marginLeft: "auto" }}>
-            <strong>© Frost · Port-42</strong>
-            <span>Early access · Build 0.5.0</span>
-            <span>Targeting June 15 2026</span>
-          </div>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

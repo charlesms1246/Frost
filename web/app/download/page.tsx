@@ -7,6 +7,7 @@
 // compacted to a single viewport and OS-aware (the visitor's platform is
 // detected and recommended).
 
+import { useState } from "react";
 import Link from "next/link";
 import SiteNav from "../_components/SiteNav";
 import { useOS } from "../_lib/use-os";
@@ -42,10 +43,20 @@ const CHECKSUMS: [string, string][] = [
 export default function DownloadPage() {
   const os = useOS();
   const release = useRelease();
+  const [showSums, setShowSums] = useState(false);
   const primaryKey = os === "other" ? "mac" : os;
   const ordered = [...PLATFORMS].sort(
     (a, b) => Number(b.key === primaryKey) - Number(a.key === primaryKey),
   );
+
+  // Prefer the SHA-256 digests GitHub returns per release asset; fall back to
+  // the baked-in sums until the release (and its digests) load.
+  const osLabel = { mac: "macOS", windows: "Windows", linux: "Linux" } as const;
+  const liveChecksums = (["mac", "windows", "linux"] as const)
+    .flatMap((k) => release.assets[k])
+    .filter((a) => a.sha256)
+    .map((a) => [`${osLabel[a.os]} · ${a.label} · ${a.format}`, a.sha256!] as [string, string]);
+  const checksums = liveChecksums.length ? liveChecksums : CHECKSUMS;
 
   return (
     <div className="dl-page">
@@ -54,9 +65,7 @@ export default function DownloadPage() {
         <SiteNav active="download" />
 
         <div className="dl-hero">
-          <div className="eyebrow">Early Access · Free</div>
           <h1 className="dl-heading">Download <span>Frost</span> 1.0</h1>
-          <p className="dl-desc">A native desktop app for macOS, Windows, and Linux. Built with Tauri 2 — lean, fast, fully offline-capable. Your keys never leave your machine.</p>
           <div className="version-badge"><span className="live" />{release.version ? `${release.version} · ` : ""}Tauri 2.0 · GitHub Releases</div>
         </div>
 
@@ -102,26 +111,34 @@ export default function DownloadPage() {
         <div className="dl-strip">
           <div className="dl-strip-sec">
             <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2L2 5v4c0 3 2.7 5.8 6 6.5C11.3 14.8 14 12 14 9V5L8 2z" stroke="currentColor" strokeWidth="1.4" /></svg>
-            Notarised on macOS · code-signed on Windows · no telemetry · runs offline after install.
+            App build SHA256 checksums from Github Actions.
           </div>
-          <details className="dl-checksums-toggle">
-            <summary>SHA-256 checksums</summary>
-            <div className="checksums">
-              <div className="checksums-header"><span>Build 0.5.0</span><span>Verify your download</span></div>
-              {CHECKSUMS.map(([name, hash]) => (
-                <div className="checksum-row" key={name}>
-                  <span className="checksum-platform">{name}</span>
-                  <span className="checksum-hash">{hash}</span>
-                  <button className="checksum-copy" onClick={() => navigator.clipboard.writeText(hash)}>Copy</button>
-                </div>
-              ))}
-            </div>
-          </details>
+          <button
+            className="dl-checksums-btn"
+            type="button"
+            aria-expanded={showSums}
+            onClick={() => setShowSums((v) => !v)}
+          >
+            SHA-256 <span className="caret" aria-hidden="true">▾</span>
+          </button>
         </div>
 
+        {showSums && (
+          <div className="checksums dl-checksums-panel">
+            <div className="checksums-header"><span>{release.version ?? "Latest release"}</span><span>{liveChecksums.length ? "From GitHub Releases" : "Verify your download"}</span></div>
+            {checksums.map(([name, hash]) => (
+              <div className="checksum-row" key={name}>
+                <span className="checksum-platform">{name}</span>
+                <span className="checksum-hash" title={hash}>{hash}</span>
+                <button className="checksum-copy" onClick={() => navigator.clipboard.writeText(hash)}>Copy</button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <footer className="dl-footer">
-          <span>© 2026 Frost · Port-42</span>
-          <span>Build 0.5.0 · Tauri 2 · Base Sepolia</span>
+          <span>© 2026 Frost</span>
+          <span>{release.version ? `${release.version} · ` : ""}Tauri 2 · Base Sepolia</span>
           <Link href="/">← Back to product</Link>
         </footer>
       </div>

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import SiteNav from "../_components/SiteNav";
+import SiteFooter from "../_components/SiteFooter";
+import FrostOrb from "../_components/FrostOrb";
 
 export const metadata: Metadata = {
   title: "Docs — Frost",
@@ -24,10 +26,11 @@ export default function DocsPage() {
       <div className="shell home-shell">
         <SiteNav active="docs" />
 
-        <header className="page-head">
+        <header className="page-head page-head--mark">
           <div className="section-eyebrow">Documentation</div>
           <h1 className="page-title">Run Frost in<br />ten minutes.</h1>
           <p className="page-lede">Everything you need to install the desktop app, connect a MetaMask smart account, and ship your first bounded automation. This is living documentation for the early-access build.</p>
+          <FrostOrb className="page-head-orb" />
         </header>
 
         <div className="docs-layout">
@@ -41,15 +44,15 @@ export default function DocsPage() {
           <div className="docs-content">
             <section className="doc-section" id="overview">
               <h2 className="doc-h2">Overview</h2>
-              <p className="doc-p">Frost is a desktop app that turns a plain-English instruction into a <strong>signed, scoped, revocable</strong> on-chain mandate. A master agent compiles your brief into a structured authority spec; you sign once; at runtime the master spawns specialist sub-agents inside strictly bounded sub-mandates. Inference is paid per call in USDC via x402, transactions go through a private mempool, and every decision is committed to an on-chain Merkle root.</p>
-              <div className="doc-callout">New here? Read the <Link className="connect-link" href="/architecture">Architecture</Link> page for how Port-42 fits together, then come back to install.</div>
+              <p className="doc-p">Frost is a desktop app that turns a plain-English instruction into a <strong>signed, scoped, revocable</strong> on-chain mandate. A master agent compiles your brief into a structured authority spec; you sign once; at runtime the master dynamically spawns specialist sub-agents inside strictly bounded sub-mandates. Inference is paid per call in USDC over the <strong>x402</strong> rail (no API keys), transactions are submitted through 1Shot&apos;s private mempool, and every decision is committed to an on-chain Merkle root via the <code className="mono">AuditRegistry</code>.</p>
+              <div className="doc-callout">New here? Read the <Link className="connect-link" href="/architecture">Architecture</Link> page for how Port-42 fits together — the six contracts are live on Base Sepolia and each links to BaseScan — then come back to install.</div>
             </section>
 
             <section className="doc-section" id="install">
               <h2 className="doc-h2">Install</h2>
-              <p className="doc-p">Grab the build for your platform from the <Link className="connect-link" href="/download">download page</Link>. Frost is a Tauri 2 app (~100 MB) and runs fully offline after install.</p>
+              <p className="doc-p">Grab the build for your platform from the <Link className="connect-link" href="/download">download page</Link>, which links straight to the latest <strong>GitHub Release</strong>. Frost is a Tauri 2 app — about <strong>5 MB</strong> for the macOS <code className="mono">.dmg</code>, Windows <code className="mono">.msi</code>/<code className="mono">.exe</code>, and Linux <code className="mono">.deb</code>/<code className="mono">.rpm</code> (the self-contained Linux <code className="mono">AppImage</code> is ~78 MB) — and runs fully offline after install.</p>
               <ol className="doc-steps">
-                <li><span className="doc-step-n">1</span><div><strong>Download &amp; open.</strong> macOS is notarised, Windows is code-signed. Verify the SHA-256 checksum if you like.</div></li>
+                <li><span className="doc-step-n">1</span><div><strong>Download &amp; open.</strong> Pick the binary for your platform; each download has a published SHA-256 you can verify against the checksums on the download page.</div></li>
                 <li><span className="doc-step-n">2</span><div><strong>Install MetaMask Flask.</strong> Frost needs Flask (or a Snap-capable MetaMask) for ERC-7715 permission grants.</div></li>
                 <li><span className="doc-step-n">3</span><div><strong>Add Base Sepolia.</strong> The MVP targets Base Sepolia; Frost will prompt MetaMask to switch/add the chain on first connect.</div></li>
               </ol>
@@ -104,23 +107,18 @@ pause for me above $8k, expire in 48h.</pre>
               </div>
             </section>
 
-            <section className="doc-section" id="faq">
+            {/* <section className="doc-section" id="faq">
               <h2 className="doc-h2">FAQ</h2>
               <div className="doc-faq">
                 <div><div className="doc-q">Does Frost ever hold my keys?</div><p className="doc-p">No. Your seed phrase and private keys never leave your device. Agents act with narrowly-scoped delegated credentials only.</p></div>
                 <div><div className="doc-q">Which chain does it run on?</div><p className="doc-p">Base Sepolia for the early-access MVP. Mainnet Base follows.</p></div>
-                <div><div className="doc-q">Do I need API keys for inference?</div><p className="doc-p">No. Venice AI is billed per call over x402 in USDC — no subscriptions, no keys to manage.</p></div>
+                <div><div className="doc-q">Do I need API keys for inference?</div><p className="doc-p">No. Inference is billed per call over x402 in USDC — no subscriptions, no keys to manage. Each call settles real USDC on Base through the 1Shot x402 facilitator before the completion is returned.</p></div>
               </div>
-            </section>
+            </section> */}
           </div>
         </div>
 
-        <footer className="site">
-          <div className="col"><strong>Frost</strong><Link href="/">Product</Link><Link href="/download">Download</Link><Link href="/architecture">Architecture</Link></div>
-          <div className="col"><strong>Docs</strong><a href="#overview">Overview</a><a href="#mandate">Mandates</a><a href="#caveats">Caveats</a></div>
-          <div className="col"><strong>Community</strong><a href="#">Discord</a><a href="#">GitHub</a></div>
-          <div className="col" style={{ textAlign: "right", marginLeft: "auto" }}><strong>© Frost · Port-42</strong><span>Early access · Build 0.5.0</span></div>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

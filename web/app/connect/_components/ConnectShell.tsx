@@ -22,7 +22,7 @@ export default function ConnectShell({
       <div className="grid-bg" aria-hidden="true" />
       <div className="shell connect-shell">
         <Link className="connect-logo" href="/">
-          FROST<small>BY PORT 42</small>
+          FROST
         </Link>
         <main className="connect-main">
           <div className="connect-eyebrow">{eyebrow}</div>
