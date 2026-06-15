@@ -100,11 +100,16 @@ fn load_demo_credentials() -> DemoCredentials {
     .into_iter()
     .flatten()
     .collect();
+    // Merge ALL readable candidates rather than stopping at the first: `frost/.env`
+    // (PUBLIC build flags, no creds) sits earlier in the search path than the repo-root
+    // `.env` (which holds BASE_SEPOLIA_PK + ONESHOT_*), so breaking at the first match
+    // shadowed the credentials and left the demo path / signing-wallet provisioning dead.
+    // `env_from_file` returns the first match per key, so earlier files still win on overlap.
     let mut contents = String::new();
     for c in candidates {
         if let Ok(s) = std::fs::read_to_string(&c) {
-            contents = s;
-            break;
+            contents.push('\n');
+            contents.push_str(&s);
         }
     }
     let get = |k: &str| -> Option<String> {
