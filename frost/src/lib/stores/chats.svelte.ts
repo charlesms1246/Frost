@@ -8,6 +8,17 @@ export type Conversation = {
 	title: string;
 	createdAt: number;
 	messages: ChatMessage[];
+	/**
+	 * The most recent COMPILED workflow sentence from the master agent (not a raw user
+	 * message). Persisted so the "Run on Runtime Manager" button survives an app reload.
+	 */
+	lastWorkflow?: string;
+	/**
+	 * The most recent COMPILED spec, serialized (bigints as strings). Lets a run after a
+	 * reload use the EXACT reviewed spec — caveats + comms template included — instead of
+	 * recompiling the sentence (which loses the interactively-built comms binding).
+	 */
+	lastSpec?: string;
 };
 
 const STORAGE_KEY = "frost.chats";
@@ -84,6 +95,15 @@ function createChats() {
 				currentId = conv.id;
 			}
 			conv.messages = [...conv.messages, msg];
+			conversations = [...conversations];
+			persist();
+		},
+		/** Persist the compiled workflow sentence (+ optional serialized spec) on the current conversation. */
+		setWorkflow(workflow: string, serializedSpec?: string) {
+			const conv = conversations.find((c) => c.id === currentId);
+			if (!conv) return;
+			conv.lastWorkflow = workflow;
+			if (serializedSpec !== undefined) conv.lastSpec = serializedSpec;
 			conversations = [...conversations];
 			persist();
 		},

@@ -4,6 +4,7 @@ import { config } from "$lib/stores/config.svelte";
 import { chats, type Conversation } from "$lib/stores/chats.svelte";
 import { customAgents, type StoredAgent } from "$lib/stores/custom-agents.svelte";
 import { grants, type DelegationRecord } from "$lib/stores/grants.svelte";
+import { usage, type UsageRow } from "$lib/stores/usage.svelte";
 
 /**
  * The user data the desktop app round-trips with the hosted backend. NO secrets:
@@ -19,6 +20,8 @@ export type CloudUserData = {
   chats?: Conversation[];
   automations?: StoredAgent[];
   grants?: DelegationRecord[];
+  /** App-wide inference usage tally (aggregated rows). */
+  usage?: UsageRow[];
 };
 
 /** Snapshot the local stores into the cloud payload. */
@@ -42,6 +45,7 @@ export function collectLocalData(): CloudUserData {
     chats: chats.list,
     automations: customAgents.list,
     grants: grants.list,
+    usage: usage.rows,
   };
 }
 
@@ -57,6 +61,7 @@ export function applyCloudData(data: CloudUserData): void {
   if (Array.isArray(data.chats)) chats.hydrate(data.chats);
   if (Array.isArray(data.automations)) customAgents.hydrate(data.automations);
   if (Array.isArray(data.grants)) grants.hydrate(data.grants);
+  if (Array.isArray(data.usage)) usage.hydrate(data.usage);
 }
 
 /** Fetch this user's data and hydrate the local stores. Returns true if data existed. */

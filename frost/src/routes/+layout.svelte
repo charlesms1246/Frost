@@ -11,6 +11,7 @@
 	import { chats } from '$lib/stores/chats.svelte';
 	import { customAgents } from '$lib/stores/custom-agents.svelte';
 	import { grants } from '$lib/stores/grants.svelte';
+	import { usage } from '$lib/stores/usage.svelte';
 	import { cloudSession } from '$lib/cloud';
 
 	const { children } = $props();
@@ -23,6 +24,7 @@
 		void chats.list;
 		void customAgents.list;
 		void grants.list;
+		void usage.rows;
 		if (cloudSession.signedIn) cloudSession.schedulePush();
 	});
 

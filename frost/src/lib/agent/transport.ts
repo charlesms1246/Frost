@@ -11,6 +11,7 @@ import type { LocalAccount } from "viem";
 import { baseSepolia } from "viem/chains";
 import { config, fallbackKeyOf } from "$lib/stores/config.svelte";
 import { veniceKill } from "$lib/stores/venice.svelte";
+import { usage, type UsageSource } from "$lib/stores/usage.svelte";
 
 /**
  * Build the inference transport from the persisted config — the single place
@@ -57,9 +58,26 @@ export function buildTransport(opts?: {
   };
   /** Settlement telemetry for the x402 primary (UI: "payment settled"). */
   onSettle?: (info: SettleInfo) => void;
+  /**
+   * Tag every inference call from this transport with its origin, so the app-wide
+   * Usage tally (`$lib/stores/usage`) attributes tokens/cost to the chat / designer /
+   * runtime. Omitted ⇒ "Inference".
+   */
+  source?: UsageSource;
 }): BuiltTransport {
   const c = config.value;
   const primaryEnabled = opts?.primaryEnabled ?? true;
+  const source: UsageSource = opts?.source ?? "Inference";
+
+  // Wrap a single-provider transport so each completion records into the app-wide usage
+  // tally (the switcher path records via onRoute instead, which also knows the provider).
+  const withUsage = (t: InferenceTransport, provider: string): InferenceTransport => ({
+    complete: async (req) => {
+      const out = await t.complete(req);
+      usage.recordCompletion(source, provider, out);
+      return out;
+    },
+  });
 
   // Each provider client is constructed with its OWN model; a caller-supplied
   // `model` is provider-specific (a Venice model id is invalid on Groq/OpenRouter
@@ -124,18 +142,24 @@ export function buildTransport(opts?: {
   };
 
   if ((hasVenice || x402) && hasFallback) {
+    // Record every routed call into the app-wide usage tally AND forward to the caller's
+    // observer (e.g. the runtime store) — both fire per call.
+    const onRoute = (info: RouteInfo) => {
+      usage.recordRoute(source, info);
+      opts?.onRoute?.(info);
+    };
     const switcher = new SwitchingInferenceTransport({
       primary: pin(makePrimary()),
       fallback: pin(makeFallback()),
       primaryCallBudget: c.veniceCallBudget,
       primaryEnabled,
-      ...(opts?.onRoute ? { onRoute: opts.onRoute } : {}),
+      onRoute,
     });
     return { transport: switcher, switcher, model };
   }
 
-  const transport = pin(
-    hasVenice || x402 ? makePrimary() : makeFallback(),
-  );
+  const usePrimary = hasVenice || x402;
+  const providerName = usePrimary ? "Venice (paid/x402)" : "OpenRouter/Groq";
+  const transport = withUsage(pin(usePrimary ? makePrimary() : makeFallback()), providerName);
   return { transport, model };
 }

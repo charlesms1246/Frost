@@ -24,6 +24,7 @@
   import { profile } from "$lib/stores/profile.svelte";
   import { Compiler, renderSpec } from "@frost/agent/browser";
   import type { CompiledSpec, CompileResult } from "@frost/agent/browser";
+  import { serializeSpec, reviveSpec } from "$lib/agent/spec-serde";
   import { FALLBACK_BASE_RPC_URL } from "$lib/flags";
   import { veniceKill } from "$lib/stores/venice.svelte";
   import SendHorizontal from "@lucide/svelte/icons/send-horizontal";
@@ -43,18 +44,42 @@
   let readySpec = $state<CompiledSpec | undefined>(undefined);
   let readyResult = $state<CompileResult | undefined>(undefined);
   let readyWorkflow = $state<string | undefined>(undefined);
+  // The most recent COMPILED workflow (ready-to-sign or not), so the run hand-off always
+  // carries the agent's real workflow sentence + its compiled spec — never a raw user
+  // message like "check if there are any missing fields" that would recompile to garbage.
+  let lastCompiled = $state<{ workflow: string; result: CompileResult } | undefined>(undefined);
 
   const messages = $derived(chats.current?.messages ?? []);
   const started = $derived(messages.length > 0);
-  const lastUserWorkflow = $derived(
-    [...messages].reverse().find((m) => m.role === "user")?.content,
-  );
+  // What "Run on Runtime Manager" hands off. Priority: an in-memory compiled spec (run
+  // directly, no recompile) → the latest non-escalated compile → the PERSISTED compiled
+  // workflow sentence (survives reload; runtime recompiles it). NEVER a raw user message.
+  type Runnable =
+    | { workflow: string; spec: CompiledSpec; result: CompileResult }
+    | { workflow: string; spec: CompiledSpec }
+    | { workflow: string };
+  const runnable = $derived.by<Runnable | undefined>(() => {
+    if (readySpec && readyResult)
+      return { workflow: readyWorkflow ?? lastCompiled?.workflow ?? "", spec: readySpec, result: readyResult };
+    if (lastCompiled && !lastCompiled.result.escalateToHITL)
+      return { workflow: lastCompiled.workflow, spec: lastCompiled.result.spec, result: lastCompiled.result };
+    // After a reload (in-memory state gone) revive the EXACT persisted spec so the run
+    // keeps the comms template; fall back to the sentence (runtime recompiles) only if
+    // the spec couldn't be revived.
+    const conv = chats.current;
+    if (conv?.lastSpec) {
+      const spec = reviveSpec(conv.lastSpec);
+      if (spec) return { workflow: conv.lastWorkflow ?? spec.description, spec };
+    }
+    return conv?.lastWorkflow ? { workflow: conv.lastWorkflow } : undefined;
+  });
 
   function resetTurnState() {
     answers = {};
     readySpec = undefined;
     readyResult = undefined;
     readyWorkflow = undefined;
+    lastCompiled = undefined;
   }
   function newChat() {
     chats.newChat();
@@ -92,7 +117,7 @@
     chats.append({ role: "user", content: text });
     pending = true;
     try {
-      const { transport, model } = buildTransport();
+      const { transport, model } = buildTransport({ source: "Workflow chat" });
       const compiler = new Compiler({ transport, model });
       const history = (chats.current?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
       const system =
@@ -157,6 +182,16 @@
           chats.append({ role: "assistant", content: formatTool(step) });
         }
       }
+      // Track the latest compiled step (ready or not) for a safe run hand-off, and
+      // PERSIST its workflow sentence so the run button survives an app reload.
+      const compiledStep = [...res.steps].reverse().find((s) => s.kind === "compiled");
+      if (compiledStep && compiledStep.kind === "compiled") {
+        lastCompiled = { workflow: compiledStep.workflow, result: compiledStep.result };
+        // Persist the workflow sentence AND the serialized spec so a run after reload
+        // uses the exact reviewed spec (comms template included), not a recompile.
+        if (!compiledStep.result.escalateToHITL)
+          chats.setWorkflow(compiledStep.workflow, serializeSpec(compiledStep.result.spec));
+      }
       if (res.ready) {
         readySpec = res.ready.spec;
         readyResult = res.ready.result;
@@ -185,17 +220,19 @@
   }
 
   function runOnRuntime() {
-    if (readySpec && readyResult) {
+    // Hand off a COMPILED spec when we have one (runtime runs it directly); else the
+    // PERSISTED workflow sentence (runtime recompiles it). Never a raw user message — a
+    // meta-message ("check if there are any missing fields") escalates as ambiguous.
+    if (!runnable) return;
+    if ("spec" in runnable) {
       handoff.set({
-        workflow: readyWorkflow ?? lastUserWorkflow ?? "",
-        spec: readySpec,
-        compileResult: readyResult,
+        workflow: runnable.workflow,
+        spec: runnable.spec,
+        ...("result" in runnable ? { compileResult: runnable.result } : {}),
         answers,
       });
-    } else if (lastUserWorkflow) {
-      handoff.set({ workflow: lastUserWorkflow, answers });
     } else {
-      return;
+      handoff.set({ workflow: runnable.workflow, answers });
     }
     goto("/runtime");
   }
@@ -346,10 +383,10 @@
 
         <div class="p-3">
           <div class="mx-auto max-w-2xl">
-            {#if lastUserWorkflow}
+            {#if runnable}
               <div class="mb-2 flex justify-center">
                 <Button variant={readySpec ? "default" : "secondary"} size="sm" onclick={runOnRuntime}>
-                  <Play class="size-3.5" /> {readySpec ? "Run compiled workflow" : "Run on Runtime Manager"}
+                  <Play class="size-3.5" /> {readySpec ? "Run compiled workflow" : "Run latest draft"}
                 </Button>
               </div>
             {/if}

@@ -50,3 +50,24 @@ export function fmtUsd(n: number): string {
   const max = n >= 1 ? 2 : 4;
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: max });
 }
+
+/** One OHLC candle; `time` is unix SECONDS (what lightweight-charts expects). */
+export type Candle = { time: number; open: number; high: number; low: number; close: number };
+
+/** Symbols that have an OHLC chart (the volatile majors; stables are flat). */
+export const CHARTABLE = ["ETH", "WBTC", "LINK", "DAI"] as const;
+
+/**
+ * Fetch OHLC candles for `symbol` over the last `days` (CoinGecko's keyless
+ * `coins/{id}/ohlc`: 1 → ~30-min candles, 7 → ~4-hour, 30 → ~4-day). Throws on a
+ * failed response; returns [] for an unknown symbol.
+ */
+export async function fetchOhlc(symbol: string, days: number, fetchImpl?: PriceFetch): Promise<Candle[]> {
+  const f: PriceFetch = fetchImpl ?? ((url) => fetch(url) as unknown as ReturnType<PriceFetch>);
+  const id = COINGECKO_IDS[symbol];
+  if (!id) return [];
+  const res = await f(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=${days}`);
+  if (!res.ok) throw new Error(`ohlc ${res.status}`);
+  const rows = (await res.json()) as [number, number, number, number, number][];
+  return rows.map(([t, o, h, l, c]) => ({ time: Math.floor(t / 1000), open: o, high: h, low: l, close: c }));
+}

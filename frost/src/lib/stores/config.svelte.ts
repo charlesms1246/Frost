@@ -1,4 +1,5 @@
 import { browser } from "$app/environment";
+import { veniceKill } from "$lib/stores/venice.svelte";
 
 /**
  * App-wide configuration captured at onboarding (`/setup`) and editable from app
@@ -104,6 +105,16 @@ export function fallbackKeyOf(c: FrostConfig): string {
 	return c.fallbackProvider === "groq" ? c.groqApiKey : c.openRouterApiKey;
 }
 
+/**
+ * Venice is usable as the thinking path only when it is configured (key + a first
+ * model) AND not switched off by the live kill switch. Mirrors `transport.ts`'s
+ * `hasVenice` so the displayed/selected model matches the leg that actually runs —
+ * toggling Venice off rewires `primaryModel` to the chosen fallback model.
+ */
+function veniceThinkingUsable(c: FrostConfig): boolean {
+	return !veniceKill.disabled && c.veniceApiKey.trim() !== "" && c.veniceModels[0].trim() !== "";
+}
+
 /** Injectable transport so the hosted-sync seam is unit-testable. */
 export type ConfigSyncFn = (config: FrostConfig) => Promise<void>;
 
@@ -123,17 +134,16 @@ function createConfig() {
 		get onboarded() {
 			return current.onboarded;
 		},
-		/** The model the runtime uses today (primary Venice, else fallback). */
+		/** The model the runtime uses today: Venice's first model when Venice is the
+		 * live thinking path, else the chosen fallback provider's first model. Respects
+		 * the Venice kill switch so toggling Venice off selects the fallback model. */
 		get primaryModel() {
-			const veniceUsable =
-				current.veniceApiKey.trim() !== "" && current.veniceModels[0].trim() !== "";
-			return veniceUsable ? current.veniceModels[0] : current.fallbackModels[0];
+			return veniceThinkingUsable(current) ? current.veniceModels[0] : current.fallbackModels[0];
 		},
-		/** A usable thinking path exists: Venice OR the chosen fallback provider. */
+		/** A usable thinking path exists: Venice (live) OR the chosen fallback provider. */
 		get ready() {
-			const venice = current.veniceApiKey.trim() !== "" && current.veniceModels[0].trim() !== "";
 			const fallback = fallbackKeyOf(current).trim() !== "" && current.fallbackModels[0].trim() !== "";
-			return venice || fallback;
+			return veniceThinkingUsable(current) || fallback;
 		},
 		get syncing() {
 			return syncing;

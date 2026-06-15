@@ -21,6 +21,19 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Print a frontend log line to the process stdout/stderr so it is visible in the
+/// `tauri dev` terminal (WebView2 does NOT forward the webview console to the CLI on
+/// Windows). The agent activity stream calls this so runtime errors are diagnosable
+/// from the terminal. `level` is "error" | "warn" | anything-else (info).
+#[tauri::command]
+fn log_line(level: &str, message: &str) {
+    match level {
+        "error" => eprintln!("[frost:error] {}", message),
+        "warn" => eprintln!("[frost:warn] {}", message),
+        _ => println!("[frost] {}", message),
+    }
+}
+
 /// Called by the splash window once its preloader finishes: reveal the main
 /// window (which loaded hidden and has already routed to dashboard/signup) and
 /// close the splash. Idempotent — missing windows are simply skipped.
@@ -141,6 +154,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             finish_splash,
+            log_line,
             load_demo_credentials,
             wallet_bridge::wallet_bridge_perform,
             key_store::key_store_set,

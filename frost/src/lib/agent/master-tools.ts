@@ -189,12 +189,23 @@ const TOOLS: MasterTool[] = [
       "Request a NEW scoped USDC spending permission from the user via MetaMask (ERC-7715). Use ONLY " +
       "when a task needs authority the user has not granted yet — e.g. a bigger per-period budget to " +
       "fund a swap beyond the existing grant. Opens MetaMask for the user to review + approve a " +
-      "human-readable, revocable permission. args: { amount: number (USDC per period), period?: " +
-      "'day'|'week', justification?: string }.",
+      "human-readable, revocable permission. args: { amount, period?: 'day'|'week', justification?: string }. " +
+      "IMPORTANT: `amount` is the number of USDC in WHOLE DOLLARS (decimals allowed) — e.g. 5 = $5, 0.5 = 50 " +
+      "cents, 50 = $50. NEVER pass base units / micro-USDC: do NOT multiply by 1,000,000 (passing 500000 would " +
+      "mean five hundred THOUSAND dollars, not 50 cents).",
     run: async (args, ctx) => {
       if (!ctx.requestAuthority) return fail("authority requests need a connected wallet (unavailable here)");
       const amount = typeof args.amount === "number" ? args.amount : Number(str(args, "amount"));
       if (!Number.isFinite(amount) || amount <= 0) return fail("amount must be a positive number of USDC per period");
+      // Guard the common base-unit confusion (e.g. 500000 passed for $0.50). A per-period USDC budget
+      // that large is implausible for this app, so it's almost certainly micro-USDC the model forgot to
+      // convert — reject with a corrective hint rather than granting a 6-orders-too-large permission.
+      if (amount >= 100_000) {
+        return fail(
+          `amount ${amount} is implausibly large and looks like base units (micro-USDC). Pass WHOLE USDC ` +
+            `instead — e.g. ${amount / 1_000_000} if you meant ${amount} base units. Do not multiply by 1,000,000.`,
+        );
+      }
       const period = str(args, "period").toLowerCase();
       const periodSecs = period === "week" ? 604_800 : 86_400; // default: per day
       const amountBaseUnits = BigInt(Math.round(amount * 1_000_000)); // USDC has 6 decimals

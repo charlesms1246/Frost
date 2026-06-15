@@ -18,6 +18,7 @@
   import { createLiveRootMandate, liveSdkIssuer } from "$lib/agent/live";
   import { crossCheckedSepoliaQuote, BASE_SEPOLIA_RPCS } from "$lib/agent/rpc-crosscheck";
   import { fetchTokenPrices, fmtUsd, type TokenPrice } from "$lib/agent/token-prices";
+  import { usage } from "$lib/stores/usage.svelte";
   import { resolveTokenSymbols, tokenBySymbol } from "$lib/agent/tokens";
   import type { Caveat } from "@frost/sdk";
   import { privateKeyToAccount } from "viem/accounts";
@@ -56,26 +57,25 @@
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Play from "@lucide/svelte/icons/play";
   import Plus from "@lucide/svelte/icons/plus";
-  import Settings2 from "@lucide/svelte/icons/settings-2";
 
   const store = new AgentSessionStore();
 
   // Monitoring dashboard: authoring lives in /chat, which hands a compiled spec here to
   // run + watch. Tabs visualize the live session only.
-  type Tab = "tree" | "activity" | "receipt";
+  type Tab = "tree" | "activity" | "usage" | "receipt";
   let activeTab = $state<Tab>("tree");
   const TABS: { id: Tab; label: string }[] = [
     { id: "tree", label: "Tree" },
     { id: "activity", label: "Activity" },
+    { id: "usage", label: "Usage" },
     { id: "receipt", label: "Receipt" },
   ];
 
   // Runtime kill switch for the Venice paid path (not persisted config).
   let primaryEnabled = $state(true);
 
-  let workflow = $state(
-    "Compare WETH→USDC quotes across DEXes and report the best rate to Discord.",
-  );
+  // Empty until a workflow is handed off from the master-agent chat — no demo stub.
+  let workflow = $state("");
 
   // Executor (HITL demo): when on, a spawned executor runs the real preflight + HITL
   // gate against a simulated swap of this notional. Above the HITL threshold ⇒ it pauses.
@@ -420,6 +420,8 @@
   let compiledSpec = $state<CompiledSpec | undefined>(undefined);
   let review = $state<string[]>([]);
   let answers = $state<Record<string, string>>({});
+  /** A session exists only once a workflow has been handed off + compiled here. */
+  const hasSession = $derived(!!compiledSpec || store.phase !== "idle" || store.children.length > 0);
 
   function toggleVenice() {
     primaryEnabled = !primaryEnabled;
@@ -457,7 +459,7 @@
 
   function ensureTransport(): InferenceTransport {
     if (transportRef) return transportRef;
-    const opts: NonNullable<Parameters<typeof buildTransport>[0]> = { primaryEnabled, onRoute: (i) => store.onRoute(i) };
+    const opts: NonNullable<Parameters<typeof buildTransport>[0]> = { primaryEnabled, onRoute: (i) => store.onRoute(i), source: "Runtime planner" };
     if (demo && X402_INFERENCE_URL) {
       // When the user has granted an ERC-7715 budget (config.metaMaskGrant), redelegate it:
       // each x402 inference payment then spends the USER's USDC within their grant, not the
@@ -494,13 +496,20 @@
       if (!h) return;
       workflow = h.workflow;
       if (h.answers) answers = h.answers;
-      if (h.spec && h.compileResult) {
+      if (h.spec) {
+        // A handed-off spec runs DIRECTLY (no recompile) — whether it came with its
+        // compile result (in-memory) or was revived from persistence after a reload
+        // (spec only). This preserves the exact caveats + comms template.
         compiledSpec = h.spec;
-        compileResult = h.compileResult;
-        review = h.compileResult.escalateToHITL ? [] : safeRender(h.spec);
+        if (h.compileResult) {
+          compileResult = h.compileResult;
+          review = h.compileResult.escalateToHITL ? [] : safeRender(h.spec);
+        } else {
+          review = safeRender(h.spec);
+        }
         // Size the swap leg to the workflow's budget (e.g. "swap 50 USDC").
         if (h.spec.spendCapTotal) execNotionalStr = String(Number(h.spec.spendCapTotal) / 1e6);
-        if (config.ready && !h.compileResult.escalateToHITL) run();
+        if (config.ready && !(h.compileResult?.escalateToHITL ?? false)) run();
       } else if (config.ready) {
         await compile();
         if (compiledSpec && !compileResult?.escalateToHITL) run();
@@ -534,7 +543,7 @@
       compileResult = undefined;
       compiledSpec = undefined;
       review = [];
-      store.markError(`compile failed: ${e instanceof Error ? e.message : String(e)}`);
+      store.markError("compile failed", e);
       activeTab = "activity";
     } finally {
       compiling = false;
@@ -561,6 +570,13 @@
     const spec = compiledSpec ?? buildSpec();
     store.beginCycle(spec.description); // preserves revocation across cycles
     activeTab = "tree"; // snap to the camera anchor while agents are live
+    // Track which stage we're in so a failure names the exact culprit, not just "error".
+    let stage = "start";
+    store.note(
+      `Run: ${demo ? "LIVE (demo creds)" : "simulated issuance"} · ` +
+        `inference ${config.primaryModel} · executor ${enableExecutor ? "on" : "off"} · ` +
+        `tokens [${marketTokens.map((t) => t.symbol).join(", ") || "default WETH→USDC"}]`,
+    );
     try {
       // ERC-7710 x402 path: the session key must be 7702-delegated to the gator before it can
       // pay via delegation (else the facilitator rejects `account_not_delegated`, spike 11).
@@ -577,7 +593,9 @@
           store.note(`Session 7702 upgrade skipped: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
+      stage = "build inference transport";
       const transport = ensureTransport();
+      stage = "issue root mandate";
       // Issuance: LIVE on Base Sepolia when demo creds are loaded (real root mandate via
       // the funded session key, then real sub-mandates under it); else simulated.
       let inner: SubMandateIssuer;
@@ -599,6 +617,7 @@
       // Once revoked, every spawn attempt fails before any chain write (the cascade).
       const issue = revocableIssuer(inner, () => store.spawningRevoked);
 
+      stage = "build session";
       const registry = buildRegistry();
       const { session } = createEmbeddedSession({
         spec,
@@ -620,10 +639,13 @@
         observer: (e) => store.onEvent(e),
       });
 
+      stage = "run cycle";
       const res = await session.runCycle({ kind: "session-start" });
       lastResultText = JSON.stringify(res, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2);
     } catch (e) {
-      store.markError(e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e));
+      // Name the failing stage and surface the full error (message + cause + stack) to
+      // both the in-app activity log and the CLI (markError mirrors to console).
+      store.markError(`cycle failed at "${stage}"`, e);
     } finally {
       pending = false;
     }
@@ -658,27 +680,46 @@
       </Tooltip.Root>
     </div>
 
-    <button
-      type="button"
-      class="rounded-xl border bg-background/40 p-3 text-left transition-colors hover:bg-accent/40"
-      onclick={() => (activeTab = "tree")}
-    >
-      <div class="flex items-center justify-between gap-2">
-        <span class="font-medium">Session #1</span>
-        <Badge variant={phaseBadge()}>{store.phase}</Badge>
+    {#if hasSession}
+      <div class="rounded-xl border bg-background/40 p-3">
+        <div class="flex items-center justify-between gap-2">
+          <button type="button" class="min-w-0 flex-1 text-left" onclick={() => (activeTab = "tree")}>
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-medium">Session #1</span>
+              <Badge variant={phaseBadge()}>{store.phase}</Badge>
+            </div>
+            <p class="mt-1 line-clamp-3 text-xs text-muted-foreground">{store.master.description || workflow}</p>
+          </button>
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <Button {...props} size="icon" variant="ghost" class="size-7 shrink-0" onclick={run} disabled={pending || compiling || !config.ready || !compiledSpec}>
+                  {#if pending}<Loader2 class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
+                </Button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">Run this session</Tooltip.Content>
+          </Tooltip.Root>
+        </div>
+        <div class="mt-2 flex gap-3 text-[10px] text-muted-foreground">
+          <span>{store.agentsTotal} agents</span>
+          <span>{store.agentsRunning} running</span>
+          <span>{store.agentsDone} done</span>
+        </div>
       </div>
-      <p class="mt-1 line-clamp-3 text-xs text-muted-foreground">{store.master.description || workflow}</p>
-      <div class="mt-2 flex gap-3 text-[10px] text-muted-foreground">
-        <span>{store.agentsTotal} agents</span>
-        <span>{store.agentsRunning} running</span>
-        <span>{store.agentsDone} done</span>
+    {:else}
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 px-2 text-center">
+        <p class="text-xs text-muted-foreground">No active session.</p>
+        <p class="text-[11px] text-muted-foreground/80">Create a workflow in the master-agent chat, then run it from there or here.</p>
+        <Button href="/chat" size="sm" variant="secondary"><Plus class="size-3.5" /> New workflow</Button>
       </div>
-    </button>
+    {/if}
 
-    <p class="mt-auto px-1 text-[10px] text-muted-foreground">
-      Author workflows in the master-agent chat — they hand off here to run and monitor. Multi-session
-      queue, condition triggers and refill cycles land here next.
-    </p>
+    {#if hasSession}
+      <p class="mt-auto px-1 text-[10px] text-muted-foreground">
+        Multi-session queue, condition triggers and refill cycles land here next.
+      </p>
+    {/if}
   </aside>
 
   <!-- CENTER: live focus -->
@@ -704,7 +745,7 @@
         {:else}
           <Badge variant="ghost" class="text-[10px] text-muted-foreground">sample spec</Badge>
         {/if}
-        <Button size="sm" class="h-7" onclick={run} disabled={pending || compiling || !config.ready || (compileResult?.escalateToHITL ?? false)}>
+        <Button size="sm" class="h-7" onclick={run} disabled={pending || compiling || !config.ready || !compiledSpec || (compileResult?.escalateToHITL ?? false)}>
           {#if pending}<Loader2 class="mr-1 size-3.5 animate-spin" />{:else}<Play class="mr-1 size-3.5" />{/if}
           Run cycle
         </Button>
@@ -712,16 +753,86 @@
     </div>
 
     <div class="flex-1 overflow-y-auto p-4">
-      {#if !config.ready}
-        <div class="mx-auto mb-3 flex max-w-xl items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
-          <span>Finish configuration (an inference provider key + model) before running.</span>
-          <Button href="/setup" size="sm" variant="secondary"><Settings2 class="size-3.5" /> Open setup</Button>
+      {#if store.phase === "error" && store.errorText}
+        <div class="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+          <div class="flex items-center justify-between gap-2">
+            <p class="font-medium">Cycle error</p>
+            <Button size="sm" variant="outline" class="h-6 px-2 text-[11px]" onclick={() => (activeTab = "activity")}>View log</Button>
+          </div>
+          <p class="mt-1 font-mono break-words">{store.errorText}</p>
         </div>
       {/if}
       {#if activeTab === "tree"}
         <DelegationTree {store} onRevoke={revoke} {revoking} />
       {:else if activeTab === "activity"}
         <ActivityLog {store} />
+      {:else if activeTab === "usage"}
+        <div class="flex flex-col gap-4">
+          <!-- Inference usage: app-wide (chat + agent designer + runtime), per source/provider/model. -->
+          <div>
+            <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Inference usage</h3>
+            <div class="overflow-hidden rounded-xl border">
+              <table class="w-full text-xs">
+                <thead class="bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th class="px-3 py-1.5 text-left font-semibold">Source</th>
+                    <th class="px-3 py-1.5 text-left font-semibold">Provider</th>
+                    <th class="px-3 py-1.5 text-left font-semibold">Model</th>
+                    <th class="px-3 py-1.5 text-right font-semibold">Requests</th>
+                    <th class="px-3 py-1.5 text-right font-semibold">Prompt</th>
+                    <th class="px-3 py-1.5 text-right font-semibold">Completion</th>
+                    <th class="px-3 py-1.5 text-right font-semibold">Total tok</th>
+                    <th class="px-3 py-1.5 text-right font-semibold">Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each usage.rows as row (row.source + row.provider + row.model)}
+                    <tr class="border-t">
+                      <td class="px-3 py-1.5">{row.source}</td>
+                      <td class="px-3 py-1.5">{row.provider}</td>
+                      <td class="px-3 py-1.5 font-mono">{row.model}</td>
+                      <td class="px-3 py-1.5 text-right tabular-nums">{row.requests}</td>
+                      <td class="px-3 py-1.5 text-right tabular-nums">{row.hasTokens ? row.promptTokens.toLocaleString() : "—"}</td>
+                      <td class="px-3 py-1.5 text-right tabular-nums">{row.hasTokens ? row.completionTokens.toLocaleString() : "—"}</td>
+                      <td class="px-3 py-1.5 text-right tabular-nums">{row.hasTokens ? row.totalTokens.toLocaleString() : "—"}</td>
+                      <td class="px-3 py-1.5 text-right tabular-nums">{row.hasCost ? `$${row.costUsd.toFixed(6)}` : "—"}</td>
+                    </tr>
+                  {:else}
+                    <tr><td colspan="8" class="px-3 py-4 text-center text-muted-foreground">No inference calls yet. Chat with the master agent or run a cycle.</td></tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            <p class="mt-1 text-[10px] text-muted-foreground">All AI calls this session — workflow chat, agent designer, runtime planner. Tokens & cost shown when the API emits them (OpenAI-style <span class="font-mono">usage</span>); "—" otherwise.</p>
+          </div>
+
+          <!-- Agent activity: requests per agent. -->
+          <div>
+            <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Requests by agent</h3>
+            <div class="overflow-hidden rounded-xl border">
+              <table class="w-full text-xs">
+                <thead class="bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th class="px-3 py-1.5 text-left font-semibold">Agent</th>
+                    <th class="px-3 py-1.5 text-left font-semibold">Behavior</th>
+                    <th class="px-3 py-1.5 text-right font-semibold">Requests</th>
+                    <th class="px-3 py-1.5 text-left font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each store.requestsByAgent as row (row.agent + (row.behavior ?? ""))}
+                    <tr class="border-t">
+                      <td class="px-3 py-1.5 font-medium">{row.agent}</td>
+                      <td class="px-3 py-1.5 text-muted-foreground">{row.behavior ?? "—"}</td>
+                      <td class="px-3 py-1.5 text-right tabular-nums">{row.requests}</td>
+                      <td class="px-3 py-1.5"><Badge variant="outline" class="text-[10px]">{row.status}</Badge></td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       {:else if activeTab === "receipt"}
         {#if receipt}
           <div class="flex flex-col gap-3">
