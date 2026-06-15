@@ -153,6 +153,8 @@ export {
   type Resolved,
 } from "./comms/escape.js";
 export { DiscordWebhookPoster, type FetchLike as DiscordFetchLike } from "./comms/discord.js";
+export { EmailPoster, type EmailPosterOptions } from "./comms/email.js";
+export { FanoutPoster } from "./comms/fanout.js";
 export {
   priceThresholdCondition,
   type PriceThresholdOptions,
