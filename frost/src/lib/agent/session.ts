@@ -369,7 +369,12 @@ export function createEmbeddedSession(opts: EmbeddedSessionOptions): EmbeddedSes
       issue: opts.issue,
       encodeCaveats: defaultCaveatEncoder,
       provisionHolder: opts.provisionHolder,
-      nextNonce: nonceCounter(1n),
+      // Seed from the clock, not 1n: the Mandate contract records used nonces
+      // per-issuer PERSISTENTLY (`usedNonces[msg.sender][nonce]`), so restarting the
+      // app and re-issuing from 1 reverts with NonceAlreadyUsed. A clock-based start
+      // (+1 per sub-mandate within a cycle) never collides across runs — same approach
+      // the root-mandate path already uses (`live.ts`, `BigInt(Date.now())`).
+      nextNonce: nonceCounter(BigInt(Date.now())),
     },
     runners,
   };

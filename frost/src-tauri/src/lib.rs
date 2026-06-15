@@ -63,6 +63,9 @@ struct DemoCredentials {
     /// 1Shot contract-method id for `AuditRegistry.commit` — gas-sponsored audit
     /// anchoring through the 1Shot server wallet (#4). Absent ⇒ session-key fallback.
     audit_method_id: Option<String>,
+    /// Etherscan-v2 API key (Base Sepolia) — lets the Wallet page list on-chain
+    /// transactions for the user + signing wallet without a key configured in Setup.
+    etherscan_api: Option<String>,
 }
 
 fn env_from_file(contents: &str, key: &str) -> Option<String> {
@@ -128,6 +131,7 @@ fn load_demo_credentials() -> DemoCredentials {
         swap_method_id: get("ONESHOT_SWAP_METHOD_ID"),
         business_id: get("ONESHOT_BUSINESS_ID"),
         audit_method_id: get("ONESHOT_AUDIT_METHOD_ID"),
+        etherscan_api: get("ETHERSCAN_API"),
     }
 }
 

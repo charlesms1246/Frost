@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import * as Card from "$lib/components/ui/card";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Badge } from "$lib/components/ui/badge";
@@ -9,9 +10,12 @@
   import { profile } from "$lib/stores/profile.svelte";
   import { fetchBalances, fmtEth, fmtWeth, fmtUsdc, type WalletBalances } from "$lib/agent/balances";
   import { fetchOhlc, fmtUsd, CHARTABLE, type Candle } from "$lib/agent/token-prices";
+  import { fetchTransactions, type WalletTx } from "$lib/agent/transactions";
   import type { Address } from "viem";
   import Wallet from "@lucide/svelte/icons/wallet";
   import ArrowLeftRight from "@lucide/svelte/icons/arrow-left-right";
+  import ArrowDownLeft from "@lucide/svelte/icons/arrow-down-left";
+  import ArrowUpRight from "@lucide/svelte/icons/arrow-up-right";
   import Fingerprint from "@lucide/svelte/icons/fingerprint";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 
@@ -20,6 +24,7 @@
   const signAddrRaw = $derived(config.value.signingWalletAddress);
   const signAddr = $derived(signAddrRaw && signAddrRaw !== ZERO ? signAddrRaw : undefined);
   const short = (a?: string) => (a ? `${a.slice(0, 8)}…${a.slice(-4)}` : "");
+  const isRealAddr = (a?: string) => !!a && /^0x[0-9a-fA-F]{40}$/.test(a) && a !== ZERO;
 
   // --- Live Base Sepolia balances (user wallet + signing wallet) ---
   let balances = $state<Record<string, WalletBalances>>({});
@@ -43,6 +48,65 @@
     } finally {
       loading = false;
     }
+  }
+
+  // --- Recent transactions: user (delegated authority) + agent signing wallet ---
+  // The Etherscan-v2 key comes from the demo `.env` (or Setup → Advanced); the v2 API
+  // rejects keyless calls, so without one we prompt instead of erroring.
+  let etherscanKey = $state("");
+  let txns = $state<Array<WalletTx & { wallet: "you" | "signer" }>>([]);
+  let txLoading = $state(false);
+  let txError = $state<string | null>(null);
+  const hasExplorerKey = $derived(!!(etherscanKey || config.value.basescanApiKey));
+
+  // One-shot demo bootstrap: pick up the Etherscan key and, if no signing wallet is set
+  // yet, adopt the funded 1Shot demo wallet so the Signing-wallet card populates (mirrors
+  // Setup's auto-provision). No-op in a packaged build without `.env`.
+  async function initFromDemo() {
+    try {
+      const demo = await invoke<{ walletAddress?: string; walletId?: string; etherscanApi?: string }>(
+        "load_demo_credentials",
+      );
+      if (demo?.etherscanApi) etherscanKey = demo.etherscanApi;
+      if (!isRealAddr(config.value.signingWalletAddress) && isRealAddr(demo?.walletAddress)) {
+        config.update({
+          signingWalletAddress: demo!.walletAddress!,
+          ...(demo!.walletId ? { signingWalletId: demo!.walletId } : {}),
+        });
+      }
+    } catch {
+      /* packaged build / no demo creds — leave as-is */
+    }
+  }
+
+  async function loadTxns() {
+    if (txLoading) return;
+    const key = etherscanKey || config.value.basescanApiKey;
+    if (!key) {
+      txns = [];
+      txError = null;
+      return;
+    }
+    txLoading = true;
+    txError = null;
+    try {
+      const jobs: Promise<Array<WalletTx & { wallet: "you" | "signer" }>>[] = [];
+      if (userAddr)
+        jobs.push(fetchTransactions(userAddr, key).then((r) => r.map((t) => ({ ...t, wallet: "you" as const }))));
+      if (signAddr)
+        jobs.push(fetchTransactions(signAddr, key).then((r) => r.map((t) => ({ ...t, wallet: "signer" as const }))));
+      const all = (await Promise.all(jobs)).flat();
+      all.sort((a, b) => b.timeStamp - a.timeStamp);
+      txns = all.slice(0, 25);
+    } catch (e) {
+      txError = e instanceof Error ? e.message : String(e);
+    } finally {
+      txLoading = false;
+    }
+  }
+
+  async function refresh() {
+    await Promise.all([loadBalances(), loadTxns()]);
   }
 
   // --- Market: live OHLC candles for a selected major token + timeframe ---
@@ -84,7 +148,10 @@
     };
   });
 
-  onMount(loadBalances);
+  onMount(async () => {
+    await initFromDemo();
+    await refresh();
+  });
 </script>
 
 {#snippet walletCard(title: string, icon: typeof Wallet, desc: string, addr: string | undefined, missing: string)}
@@ -134,12 +201,12 @@
       <Tooltip.Root>
         <Tooltip.Trigger>
           {#snippet child({ props })}
-            <Button {...props} variant="outline" size="sm" onclick={loadBalances} disabled={loading}>
-              <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> Refresh
+            <Button {...props} variant="outline" size="sm" onclick={refresh} disabled={loading || txLoading}>
+              <RefreshCw class="size-4 {loading || txLoading ? 'animate-spin' : ''}" /> Refresh
             </Button>
           {/snippet}
         </Tooltip.Trigger>
-        <Tooltip.Content side="bottom">Reload balances from Base Sepolia</Tooltip.Content>
+        <Tooltip.Content side="bottom">Reload balances + transactions from Base Sepolia</Tooltip.Content>
       </Tooltip.Root>
     </div>
   </header>
@@ -200,12 +267,50 @@
       <Card.Root>
         <Card.Header class="pb-2">
           <Card.Title class="flex items-center gap-2 text-base"><ArrowLeftRight class="size-4 text-primary" /> Recent transactions</Card.Title>
-          <Card.Description class="text-xs">Issuance, swaps and audit commits from your sessions.</Card.Description>
+          <Card.Description class="text-xs">Your delegated-authority wallet and the agent's signing wallet, on Base Sepolia.</Card.Description>
         </Card.Header>
-        <Card.Content>
-          <div class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
-            No transactions yet. Live runs (via the custodial signing wallet) will list here with BaseScan links.
-          </div>
+        <Card.Content class="max-h-72 overflow-y-auto">
+          {#if txError}
+            <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Couldn't load transactions: {txError}
+            </div>
+          {:else if !hasExplorerKey}
+            <div class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
+              Add a BaseScan API key in Settings → Advanced to list on-chain transactions.
+            </div>
+          {:else if txLoading && txns.length === 0}
+            <div class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">Loading transactions…</div>
+          {:else if txns.length === 0}
+            <div class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
+              No transactions yet for either wallet.
+            </div>
+          {:else}
+            <ul class="divide-y">
+              {#each txns as t (t.wallet + t.hash + t.amount)}
+                {@const incoming = t.direction === "in"}
+                <li class="flex items-center gap-3 py-2">
+                  <span class="flex size-7 shrink-0 items-center justify-center rounded-full {incoming ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}">
+                    {#if incoming}<ArrowDownLeft class="size-3.5" />{:else}<ArrowUpRight class="size-3.5" />{/if}
+                  </span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="truncate text-xs font-medium text-foreground">{t.kind}</span>
+                      <Badge variant="outline" class="shrink-0 text-[10px]">{t.wallet === "you" ? "Delegated" : "Signer"}</Badge>
+                    </div>
+                    <a class="font-mono text-[11px] text-muted-foreground hover:text-primary hover:underline" href={t.link} target="_blank" rel="noopener noreferrer">{short(t.hash)}</a>
+                  </div>
+                  <div class="shrink-0 text-right">
+                    <div class="font-mono text-xs tabular-nums {incoming ? 'text-emerald-600 dark:text-emerald-400' : 'text-foreground'}">
+                      {t.direction === "out" ? "−" : incoming ? "+" : ""}{t.amount}
+                    </div>
+                    {#if t.timeStamp}
+                      <div class="text-[10px] text-muted-foreground">{new Date(t.timeStamp * 1000).toLocaleDateString()}</div>
+                    {/if}
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </Card.Content>
       </Card.Root>
     </div>

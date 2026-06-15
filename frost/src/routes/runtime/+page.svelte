@@ -94,10 +94,22 @@
   // comparison + the social post. Recomputes when the handed-off workflow text changes.
   const marketTokens = $derived(resolveTokenSymbols(workflow));
 
+  /** Format a number as a bare decimal string (no exponential) for a `numeric` comms var. */
+  function fmtNum(x: number): string {
+    if (!Number.isFinite(x)) return "0";
+    let s = x.toFixed(6);
+    if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+    return s;
+  }
+
   /**
    * Comms template values, evaluated at SEND time (after the pricer picked a best token
-   * and the executor produced a tx), filling each declared variable by heuristic: link →
-   * token info page, tx/hash → the executor tx, token/asset → the chosen symbol.
+   * and the executor produced a tx). Filled per the variable's DECLARED SOURCE so each
+   * value passes the comms agent's H-14 shape check (`escapeForSource`): a `numeric` var
+   * gets a real number, not a token symbol — the previous source-blind heuristic assigned
+   * the symbol string to every non-link/non-tx var, so `amount`/`price` ("numeric") were
+   * rejected as "not a number". Numbers are mapped by name (price → spot USD, output
+   * amount → USDC-out ÷ price, amount/value → USDC out).
    */
   function commsValues(): Record<string, string> {
     const best = store.bestRoute?.label ?? marketTokens[0]?.symbol ?? "the top token";
@@ -106,13 +118,41 @@
       store.children.find((c) => /exec/i.test(c.role))?.txHash ??
       store.children.find((c) => c.txHash)?.txHash ??
       store.master.rootMandateId ?? "";
+    const addr = tokenBySymbol(best)?.address ?? config.value.signingWalletAddress ?? GRANT_TOKEN;
+    const usdcOut = store.bestRoute ? Number(store.bestRoute.amountOutUsdc) / 1e6 : undefined;
+    const px = prices.find((p) => p.symbol === best)?.usd;
     const vars = compiledSpec?.commsTemplate?.variables ?? [];
     const out: Record<string, string> = {};
     for (const v of vars) {
       const n = v.name.toLowerCase();
-      if (/link|url/.test(n)) out[v.name] = link;
-      else if (/tx|txn|hash/.test(n)) out[v.name] = tx;
-      else out[v.name] = best; // token / asset / symbol / default
+      switch (v.source) {
+        case "numeric": {
+          const num = /price/.test(n)
+            ? px
+            : /eth|out|receive/.test(n)
+              ? usdcOut !== undefined && px
+                ? usdcOut / px
+                : undefined
+              : /amount|usdc|usd|value|total|qty|size/.test(n)
+                ? usdcOut
+                : px;
+          out[v.name] = fmtNum(num ?? 0);
+          break;
+        }
+        case "timestamp":
+          out[v.name] = Math.floor(Date.now() / 1000).toString();
+          break;
+        case "known-address":
+          out[v.name] = addr;
+          break;
+        case "txhash":
+          out[v.name] = tx;
+          break;
+        case "internal":
+        case "untrusted-text":
+        default:
+          out[v.name] = /link|url/.test(n) ? link : best;
+      }
     }
     return out;
   }
