@@ -12,6 +12,14 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-is-maximized",
-    "opener:default"
+    "opener:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.1shotapi.com/*" },
+        { "url": "https://*.1shotapi.com/*" },
+        { "url": "https://*.1shotapi.dev/*" }
+      ]
+    }
   ]
 }

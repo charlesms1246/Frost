@@ -58,6 +58,14 @@ struct DemoCredentials {
     wallet_id: Option<String>,
     wallet_address: Option<String>,
     swap_method_id: Option<String>,
+    /// 1Shot business id — provisioning a per-user custodial signing wallet (#5).
+    business_id: Option<String>,
+    /// 1Shot contract-method id for `AuditRegistry.commit` — gas-sponsored audit
+    /// anchoring through the 1Shot server wallet (#4). Absent ⇒ session-key fallback.
+    audit_method_id: Option<String>,
+    /// Etherscan-v2 API key (Base Sepolia) — lets the Wallet page list on-chain
+    /// transactions for the user + signing wallet without a key configured in Setup.
+    etherscan_api: Option<String>,
 }
 
 fn env_from_file(contents: &str, key: &str) -> Option<String> {
@@ -95,11 +103,16 @@ fn load_demo_credentials() -> DemoCredentials {
     .into_iter()
     .flatten()
     .collect();
+    // Merge ALL readable candidates rather than stopping at the first: `frost/.env`
+    // (PUBLIC build flags, no creds) sits earlier in the search path than the repo-root
+    // `.env` (which holds BASE_SEPOLIA_PK + ONESHOT_*), so breaking at the first match
+    // shadowed the credentials and left the demo path / signing-wallet provisioning dead.
+    // `env_from_file` returns the first match per key, so earlier files still win on overlap.
     let mut contents = String::new();
     for c in candidates {
         if let Ok(s) = std::fs::read_to_string(&c) {
-            contents = s;
-            break;
+            contents.push('\n');
+            contents.push_str(&s);
         }
     }
     let get = |k: &str| -> Option<String> {
@@ -116,6 +129,9 @@ fn load_demo_credentials() -> DemoCredentials {
         wallet_id: get("ONESHOT_WALLET_ID"),
         wallet_address: get("ONESHOT_WALLET_ADDRESS"),
         swap_method_id: get("ONESHOT_SWAP_METHOD_ID"),
+        business_id: get("ONESHOT_BUSINESS_ID"),
+        audit_method_id: get("ONESHOT_AUDIT_METHOD_ID"),
+        etherscan_api: get("ETHERSCAN_API"),
     }
 }
 
@@ -123,6 +139,7 @@ fn load_demo_credentials() -> DemoCredentials {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
         .setup(|app| {
             // System tray: lets Frost keep running with the window closed so the
             // in-webview agents stay active. The menu reopens or fully quits the app.

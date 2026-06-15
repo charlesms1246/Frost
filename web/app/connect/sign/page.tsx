@@ -107,9 +107,13 @@ function SignInner() {
         <div className="kv"><span className="k">status</span><span className="v mono">{status}</span></div>
         <div className="kv"><span className="k">detail</span><span className="v mono">{detail || "—"}</span></div>
       </div>
-      <button onClick={run} className="frost-btn" disabled={status === "working" || missing}>
-        {status === "working" ? "Signing…" : "Sign in with MetaMask"}
-      </button>
+      {status === "ok" ? (
+        <p className="txt-ok">Signed in — you can return to Frost and close this tab.</p>
+      ) : (
+        <button onClick={run} className="frost-btn" disabled={status === "working" || missing}>
+          {status === "working" ? "Signing…" : "Sign in with MetaMask"}
+        </button>
+      )}
     </ConnectShell>
   );
 }

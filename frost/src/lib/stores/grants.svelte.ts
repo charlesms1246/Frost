@@ -78,6 +78,11 @@ function createGrants() {
 			persist();
 			return rec.id;
 		},
+		/** Mark a single record (by id) as revoked. */
+		markRevokedById(id: string) {
+			records = records.map((r) => (r.id === id ? { ...r, revoked: true } : r));
+			persist();
+		},
 		/** Mark every still-active record for `delegate` (or all, if omitted) as revoked. */
 		markRevoked(delegate?: string) {
 			const d = delegate?.toLowerCase();

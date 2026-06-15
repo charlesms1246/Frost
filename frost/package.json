@@ -18,6 +18,7 @@
     "@frost/sdk": "file:../sdk",
     "@metamask/smart-accounts-kit": "^1.6.0",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2",
     "@xyflow/svelte": "^1.6.0",
     "lightweight-charts": "^5.2.0",

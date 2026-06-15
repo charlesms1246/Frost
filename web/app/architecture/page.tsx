@@ -1,12 +1,25 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import SiteNav from "../_components/SiteNav";
+import SiteFooter from "../_components/SiteFooter";
 import FrostOrb from "../_components/FrostOrb";
 import { SnowflakeMark } from "../_components/SnowflakeMark";
 
+const BASESCAN = "https://sepolia.basescan.org/address/";
+
+// A diagonal field of small snowflake marks, filling an otherwise-empty grid cell.
+function MarkField({ alt = false }: { alt?: boolean }) {
+  return (
+    <div className={`mark-field${alt ? " mark-field--alt" : ""}`} aria-hidden="true">
+      {Array.from({ length: 72 }).map((_, i) => (
+        <SnowflakeMark key={i} className="mark-tile" />
+      ))}
+    </div>
+  );
+}
+
 export const metadata: Metadata = {
-  title: "Architecture — Frost & Port-42",
-  description: "How Port-42 powers Frost: the four-layer stack, the session lifecycle, the six contracts, and the caveat model.",
+  title: "Architecture — Frost",
+  description: "How Frost works: the four-layer stack, the session lifecycle, the six contracts, and the caveat model.",
 };
 
 const LAYERS = [
@@ -25,13 +38,13 @@ const LIFECYCLE = [
   ["Commit", "The full decision tree is hashed and the Merkle root is anchored on Base Sepolia. Revoke any branch at any time."],
 ];
 
-const CONTRACTS = [
-  ["Mandate", "Issues root mandates and sub-mandates; validates each operation against the active caveat set and ancestry."],
-  ["RefillableMandate", "Refill replaces the active mandate and mints a fresh mandateId per cycle (Option A)."],
-  ["DelegationRegistry", "Tracks aggregate redelegation state so caps hold across the whole sub-mandate tree."],
-  ["Settlement", "x402 settlement over USDC. The USDC address is hardcoded immutably per chain."],
-  ["ProviderRegistry", "Whitelists the inference / execution providers an agent may pay and call."],
-  ["Revocation", "One-call revocation of any delegation — a branch or the master's spawning authority."],
+const CONTRACTS: [string, string, string][] = [
+  ["Mandate", "Issues root mandates and sub-mandates; validates each operation against the active caveat set and ancestry.", "0x4F03b0df6cBB79be9E19872EF7B6809e36fA57FE"],
+  ["RefillableMandate", "Refill replaces the active mandate and mints a fresh mandateId per cycle (Option A).", "0x4DeC870341cfcbc208b5A7c985946e49Eb70b76E"],
+  ["DelegationRegistry", "Tracks aggregate redelegation state so caps hold across the whole sub-mandate tree.", "0x4981C4Ad54D1ceF31Ef9F8Dc4627CdeEEc841D6C"],
+  ["Settlement", "x402 settlement over USDC. The USDC address is hardcoded immutably per chain.", "0xFBCd30DF3633b92bc79dAC6E94b7461E568CA860"],
+  ["ProviderRegistry", "Whitelists the inference / execution providers an agent may pay and call.", "0x6E33f6ec96Be0660E4E5573338113214538D5cBd"],
+  ["Revocation", "One-call revocation of any delegation — a branch or the master's spawning authority.", "0xadc993c5dC34d1017dCAD10651Aff89233b39FE9"],
 ];
 
 export default function ArchitecturePage() {
@@ -42,9 +55,9 @@ export default function ArchitecturePage() {
         <SiteNav active="architecture" />
 
         <header className="page-head">
-          <div className="section-eyebrow">Architecture · Port-42</div>
+          <div className="section-eyebrow">Architecture</div>
           <h1 className="page-title">Bounded authority,<br />all the way down.</h1>
-          <p className="page-lede">Frost is the product; <strong>Port-42</strong> is the rail underneath it — MetaMask Smart Accounts, ERC-7710 redelegation, x402 payments, Venice AI inference, and 1Shot execution, composed so an autonomous agent can do exactly what you authorised and nothing more.</p>
+          <p className="page-lede">Frost runs on a rail of <strong>MetaMask Smart Accounts</strong>, ERC-7710 redelegation, x402 payments, Venice AI inference, and 1Shot execution — composed so an autonomous agent can do exactly what you authorised and nothing more.</p>
         </header>
 
         {/* four layers */}
@@ -59,12 +72,12 @@ export default function ArchitecturePage() {
                 <span className="feat-tag">{l.tag}</span>
               </div>
             ))}
-            {/* fill the two empty cells of the 3-col grid with a frost-mark motif */}
+            {/* fill the two empty cells of the 3-col grid with a diagonal snowflake field */}
             <div className="how-step how-step--motif" aria-hidden="true">
-              <SnowflakeMark className="motif-mark" />
+              <MarkField />
             </div>
             <div className="how-step how-step--motif" aria-hidden="true">
-              <SnowflakeMark className="motif-mark motif-mark--alt" />
+              <MarkField alt />
             </div>
           </div>
         </section>
@@ -97,15 +110,24 @@ export default function ArchitecturePage() {
               <div className="section-eyebrow" style={{ marginBottom: 16 }}>On-chain</div>
               <div className="features-title">Six contracts.</div>
             </div>
-            <p className="features-sub">Port-42 is deliberately small. Six contracts hold the entire authority, settlement, and audit model — each one auditable in isolation.</p>
+            <p className="features-sub">Frost&apos;s on-chain core is deliberately small. Six contracts hold the entire authority, settlement, and audit model — each one auditable in isolation.</p>
           </div>
           <div className="feat-grid">
-            {CONTRACTS.map(([name, desc]) => (
-              <div className="feat-card" key={name}>
+            {CONTRACTS.map(([name, desc, addr]) => (
+              <a
+                className="feat-card feat-card--link"
+                key={name}
+                href={`${BASESCAN}${addr}`}
+                target="_blank"
+                rel="noreferrer"
+              >
                 <div className="feat-name mono">{name}</div>
                 <p className="feat-desc">{desc}</p>
-                <span className="feat-tag">Solidity</span>
-              </div>
+                <div className="feat-card-foot">
+                  <span className="feat-addr mono">{addr.slice(0, 6)}…{addr.slice(-4)}</span>
+                  <span className="feat-basescan">BaseScan ↗</span>
+                </div>
+              </a>
             ))}
           </div>
         </section>
@@ -132,12 +154,7 @@ export default function ArchitecturePage() {
           </div>
         </section>
 
-        <footer className="site">
-          <div className="col"><strong>Frost</strong><Link href="/">Product</Link><Link href="/download">Download</Link><Link href="/docs">Docs</Link></div>
-          <div className="col"><strong>Architecture</strong><a href="#">Layers</a><a href="#">Lifecycle</a><a href="#">Contracts</a></div>
-          <div className="col"><strong>Community</strong><a href="#">Discord</a><a href="#">GitHub</a></div>
-          <div className="col" style={{ textAlign: "right", marginLeft: "auto" }}><strong>© Frost · Port-42</strong><span>Early access · Build 0.5.0</span></div>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

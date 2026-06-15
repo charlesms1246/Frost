@@ -7,142 +7,19 @@
 // Frosted-glass snowflake hero, partner strip, interactive lifecycle
 // walk-through, how-it-works, features, use cases, download banner, footer.
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import FrostOrb from "./_components/FrostOrb";
 import SiteNav from "./_components/SiteNav";
+import SiteFooter from "./_components/SiteFooter";
+import FaqList from "./_components/FaqList";
 import { useOS } from "./_lib/use-os";
-
-type TreeNode = { cls: string; name: string; role: string };
-type TreeItem =
-  | { line: true }
-  | { branch: TreeNode[] }
-  | TreeNode;
-
-type WalkState = {
-  label: string;
-  title: string;
-  status: string;
-  l1: string;
-  quote: string;
-  tree: TreeItem[];
-  l3: string;
-  caveats: [string, string][];
-  foot: string;
-  cta: string;
-};
-
-const STATES: WalkState[] = [
-  {
-    label: "01 / BRIEF",
-    title: "Frost — New Session · drafting",
-    status: "DRAFT",
-    l1: "Session Brief",
-    quote:
-      "If <em>ETH on Uniswap v3</em> falls below <em>$2,800</em>, swap to USDC on the best Base DEX, then post a Discord update to my community.",
-    tree: [
-      { cls: "node user", name: "0x7Ac…E91", role: "User" },
-      { line: true },
-      { cls: "node master pending", name: "master.agent", role: "Pending" },
-    ],
-    l3: "Compiled Caveats",
-    caveats: [
-      ["CAP", "$200"], ["HITL ≥", "$8k"], ["SLIPPAGE", "30bps"],
-      ["TTL", "48h"], ["SUBS ≤", "12"], ["CHAIN", "Base"],
-    ],
-    foot: "Review the structured spec before signing",
-    cta: "Sign Mandate",
-  },
-  {
-    label: "02 / SPAWN",
-    title: "Frost — Task Session · #04B2",
-    status: "ACTIVE",
-    l1: "Condition fired",
-    quote:
-      "Alchemy Notify · <em>ETH/USDC</em> price crossed <em>$2,800</em> · master spawning sub-agents.",
-    tree: [
-      { cls: "node user", name: "0x7Ac…E91", role: "User" },
-      { line: true },
-      { cls: "node master", name: "master.agent", role: "Master" },
-      { line: true },
-      {
-        branch: [
-          { cls: "node sub", name: "monitor", role: "Sub" },
-          { cls: "node sub", name: "pricer.uni", role: "Sub" },
-          { cls: "node sub", name: "pricer.1inch", role: "Sub" },
-          { cls: "node sub", name: "pricer.para", role: "Sub" },
-        ],
-      },
-    ],
-    l3: "Spawn budget",
-    caveats: [
-      ["SUBS", "4 / 12"], ["SPENT", "$1.40"], ["VENICE", "4 calls"], ["RATE", "OK"],
-    ],
-    foot: "Master selecting best route across 3 quotes",
-    cta: "Inspect",
-  },
-  {
-    label: "03 / HITL",
-    title: "Frost — Task Session · #04B2",
-    status: "PAUSED",
-    l1: "Awaiting approval",
-    quote:
-      "Executor pre-check: tx value <em>$9,420</em> exceeds <em>HITL ≥ $8k</em>. Holding submission.",
-    tree: [
-      { cls: "node user", name: "0x7Ac…E91", role: "User" },
-      { line: true },
-      { cls: "node master", name: "master.agent", role: "Master" },
-      { line: true },
-      {
-        branch: [
-          { cls: "node sub", name: "pricer.uni", role: "Done" },
-          { cls: "node sub hitl", name: "executor", role: "HITL" },
-          { cls: "node sub", name: "comms", role: "Queued" },
-        ],
-      },
-    ],
-    l3: "Pending transaction",
-    caveats: [
-      ["VALUE", "$9,420"], ["SLIPPAGE", "24bps"], ["ROUTE", "Uniswap v3"], ["GAS", "0.04 gwei"],
-    ],
-    foot: "Notification posted to OS · 14:32 remaining",
-    cta: "Approve",
-  },
-  {
-    label: "04 / RECEIPT",
-    title: "Frost — Task Session · #04B2 · closed",
-    status: "SETTLED",
-    l1: "Session receipt",
-    quote:
-      "Swap settled on <em>Uniswap v3</em>. Comms posted to <em>#alpha-room</em>. Audit Merkle root anchored on Base Sepolia.",
-    tree: [
-      { cls: "node user", name: "0x7Ac…E91", role: "User" },
-      { line: true },
-      { cls: "node master", name: "master.agent", role: "Closed" },
-      { line: true },
-      {
-        branch: [
-          { cls: "node sub", name: "monitor", role: "Done" },
-          { cls: "node sub", name: "pricer×3", role: "Done" },
-          { cls: "node sub exec", name: "executor", role: "Done" },
-          { cls: "node sub", name: "comms", role: "Done" },
-        ],
-      },
-    ],
-    l3: "Totals",
-    caveats: [
-      ["SWAP", "$9,420"], ["SPENT", "$0.84"], ["SUBS", "6 / 12"], ["HITL", "1"], ["BLOCK", "#19,402,118"],
-    ],
-    foot: "0x3b9…f02 · on-chain Merkle root",
-    cta: "Open receipt",
-  },
-];
+import { useRelease } from "./_lib/use-release";
 
 const HOME_PLATFORMS = [
   {
     key: "mac",
     label: "macOS",
-    meta: "Apple Silicon + Intel · dmg",
+    meta: "Apple Silicon · dmg",
     icon: <svg className="dl-btn-icon" viewBox="0 0 18 18" fill="none"><path d="M9 2v10M5 8l4 4 4-4M2.5 14.5h13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>,
   },
   {
@@ -159,54 +36,34 @@ const HOME_PLATFORMS = [
   },
 ] as const;
 
-function TreeView({ items }: { items: TreeItem[] }) {
-  return (
-    <div className="tree">
-      {items.map((item, i) => {
-        if ("line" in item) return <div key={i} className="tree-line" />;
-        if ("branch" in item) {
-          return (
-            <div key={i} className="branch">
-              {item.branch.map((n, j) => (
-                <div key={j} className={n.cls}>
-                  <span className="glyph" />
-                  {n.name} <span className="role">{n.role}</span>
-                </div>
-              ))}
-            </div>
-          );
-        }
-        return (
-          <div key={i} className={item.cls}>
-            <span className="glyph" />
-            {item.name} <span className="role">{item.role}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+const SHOTS = [
+  { src: "/shots/chat.png", title: "Describe in plain English", desc: "Author a session brief in chat — Frost compiles it into a signed, scoped mandate.", alt: "Frost chat — authoring a session brief" },
+  { src: "/shots/multi-agent-workflow.png", title: "Live delegation tree", desc: "Watch the master agent spawn sub-agents on demand, each with bounded authority.", alt: "Frost multi-agent workflow visualizer" },
+  { src: "/shots/custom_agents.png", title: "Custom agents", desc: "Define specialist agents and the caveats that cap their spend, calls, and scope.", alt: "Frost custom agents configuration" },
+  { src: "/shots/wallet-page.png", title: "Wallet & permissions", desc: "Review balances and revoke any delegated branch in one click. Keys stay on-device.", alt: "Frost wallet and permissions page" },
+] as const;
 
 export default function Home() {
   const [idx, setIdx] = useState(0);
   const os = useOS();
+  const release = useRelease();
 
-  // Walk-through auto-advances on its own — the app window reads as "live"
-  // without the (removed) playback controls cluttering the detail section.
+  // The detail stage cycles real app screenshots (placeholders for the demo
+  // video that will live here later). Auto-advances; dots allow manual select.
   useEffect(() => {
-    const t = setInterval(() => setIdx((i) => (i + 1) % STATES.length), 3200);
+    const t = setInterval(() => setIdx((i) => (i + 1) % SHOTS.length), 4000);
     return () => clearInterval(t);
   }, []);
 
-  const s = STATES[idx];
+  const shot = SHOTS[idx];
   // Default the recommendation to macOS until/unless we detect the visitor's OS.
   const primaryKey = os === "other" ? "mac" : os;
 
   return (
     <>
       <div className="grid-bg" aria-hidden="true" />
-      <div className="meta-strip" aria-hidden="true">PORT-42 · MAINFRAME · BASE SEPOLIA</div>
-      <div className="meta-strip-l" aria-hidden="true">BUILD 0.5.0 · MAY 2026 · TAURI</div>
+      <div className="meta-strip" aria-hidden="true">FROST · MAINFRAME · BASE SEPOLIA</div>
+      <div className="meta-strip-l" aria-hidden="true">BUILD 0.1.0 · JUN 2026 · TAURI</div>
 
       <div className="shell home-shell">
         <SiteNav active="product" />
@@ -259,56 +116,47 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ─── product detail ─── */}
-        <section className="detail detail-2" id="detail">
-          <div className="col col-left">
-            <div className="kicker">Desktop Application</div>
-            <h2 className="product-name">Frost<br />1.0</h2>
-            <div className="product-spec">Tauri · 240 MB · macOS / Linux / Windows</div>
-            <div style={{ marginTop: "auto" }}>
-              <div className="label">Stack</div>
-              <ul className="stack-list" style={{ marginTop: 12 }}>
-                <li><span>Identity</span>MetaMask Smart Accounts</li>
-                <li><span>Authority</span>ERC-7710 redelegation</li>
-                <li><span>Settlement</span>x402 over USDC</li>
-                <li><span>Inference</span>Venice AI (native-x402)</li>
-                <li><span>Execution</span>1Shot API · private mempool</li>
-                <li><span>Audit</span>On-chain Merkle commitment</li>
-              </ul>
-            </div>
+        {/* ─── product showcase (centered) ─── */}
+        <section className="showcase" id="detail" aria-label="Inside Frost">
+          <div className="showcase-head">
+            <div className="section-eyebrow">Desktop Application</div>
+            <h2 className="showcase-title">Frost 1.0</h2>
+            <p className="showcase-lede">A native desktop app — Tauri 2, ~5 MB, for macOS, Windows, and Linux. Describe an automation in plain English and Frost compiles it into a signed, scoped, revocable on-chain mandate, then runs it while you walk away.</p>
           </div>
 
-          <div className="detail-stage">
-            <article className="app-frame" aria-label="Frost task session detail">
-              <header className="app-titlebar">
-                <div className="traffic"><span /><span /><span /></div>
-                <div className="app-title">{s.title}</div>
-                <div className="app-meta"><span className="live" />{s.status}</div>
-              </header>
-              <div className="app-body">
-                <div>
-                  <div className="app-section-label">{s.l1}</div>
-                  <p className="app-quote" dangerouslySetInnerHTML={{ __html: s.quote }} />
-                </div>
-                <div>
-                  <div className="app-section-label">Delegation Tree</div>
-                  <TreeView items={s.tree} />
-                </div>
-                <div>
-                  <div className="app-section-label">{s.l3}</div>
-                  <div className="caveats">
-                    {s.caveats.map(([k, v], i) => (
-                      <span className="chip" key={i}><span className="k">{k}</span><b>{v}</b></span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <footer className="app-foot">
-                <div className="ks">{s.foot}</div>
-                <div className="sign">{s.cta}</div>
-              </footer>
-            </article>
-          </div>
+          {/* Real captures of the desktop app — placeholder for the demo
+              walk-through video, to be swapped in here later. */}
+          <figure className="shot-showcase showcase-media">
+            <div className="shot-frame">
+              <img className="shot-img" src={shot.src} alt={shot.alt} loading="lazy" />
+            </div>
+            <figcaption className="shot-cap">
+              <span className="shot-cap-title">{shot.title}</span>
+              <span className="shot-cap-desc">{shot.desc}</span>
+            </figcaption>
+            <div className="shot-dots" role="tablist" aria-label="Screenshots">
+              {SHOTS.map((sh, i) => (
+                <button
+                  key={sh.src}
+                  type="button"
+                  role="tab"
+                  className={`shot-dot${i === idx ? " active" : ""}`}
+                  aria-label={sh.title}
+                  aria-selected={i === idx}
+                  onClick={() => setIdx(i)}
+                />
+              ))}
+            </div>
+          </figure>
+
+          <ul className="showcase-stack">
+            <li><span>Identity</span>MetaMask Smart Accounts</li>
+            <li><span>Authority</span>ERC-7710 redelegation</li>
+            <li><span>Settlement</span>x402 over USDC</li>
+            <li><span>Inference</span>Venice AI (native-x402)</li>
+            <li><span>Execution</span>1Shot API · private mempool</li>
+            <li><span>Audit</span>On-chain Merkle commitment</li>
+          </ul>
         </section>
 
         {/* ─── how it works ─── */}
@@ -342,8 +190,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ─── features ─── */}
-        <section className="features" aria-label="Features">
+        {/* ─── features (dark highlight panel) ─── */}
+        <section className="features features--dark" aria-label="Features">
           <div className="features-header">
             <div>
               <div className="section-eyebrow" style={{ marginBottom: 16 }}>Capabilities</div>
@@ -416,6 +264,9 @@ export default function Home() {
           </div>
         </section>
 
+        {/* ─── faq ─── */}
+        <FaqList />
+
         {/* ─── download banner ─── */}
         <section className="dl-banner" id="download" aria-label="Download Frost">
           <h2 className="dl-title">Download<br />Frost 1.0</h2>
@@ -424,46 +275,26 @@ export default function Home() {
             {[...HOME_PLATFORMS]
               .sort((a, b) => Number(b.key === primaryKey) - Number(a.key === primaryKey))
               .map((p) => (
-                <Link key={p.key} className={`dl-btn${p.key === primaryKey ? " primary" : ""}`} href="/download">
+                <a
+                  key={p.key}
+                  className={`dl-btn${p.key === primaryKey ? " primary" : ""}`}
+                  href={release.assets[p.key][0]?.url ?? release.releaseUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {p.icon}
                   <span className="dl-btn-text">
                     <span className="dl-btn-label">{p.label}{p.key === os ? " · detected" : ""}</span>
                     <span className="dl-btn-meta">{p.meta}</span>
                   </span>
-                </Link>
+                </a>
               ))}
           </div>
-          <div className="dl-note">Build 0.5.0 · May 2026 · Tauri 2 · Early Access</div>
+          <div className="dl-note">{release.version ? `${release.version} · ` : ""}Tauri 2 · Early Access · from GitHub Releases</div>
         </section>
 
         {/* ─── footer ─── */}
-        <footer className="site">
-          <div className="col">
-            <strong>Frost</strong>
-            <Link href="/">Product</Link>
-            <Link href="#">Pitch deck</Link>
-            <Link href="#">Build journal</Link>
-            <Link href="/download">Download</Link>
-          </div>
-          <div className="col">
-            <strong>Resources</strong>
-            <Link href="#">Port-42 architecture</Link>
-            <Link href="#">Threat model</Link>
-            <Link href="#">Contract specs</Link>
-            <Link href="#">Changelog</Link>
-          </div>
-          <div className="col">
-            <strong>Community</strong>
-            <Link href="#">Discord</Link>
-            <Link href="#">GitHub</Link>
-            <Link href="#">X / Twitter</Link>
-          </div>
-          <div className="col" style={{ textAlign: "right", marginLeft: "auto" }}>
-            <strong>© Frost · Port-42</strong>
-            <span>Early access · Build 0.5.0</span>
-            <span>Targeting June 15 2026</span>
-          </div>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

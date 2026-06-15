@@ -88,20 +88,47 @@ export function buildCompilePrompt(input: CompileInput): ChatMessage[] {
  * compiler, not here; this only guarantees the top-level shape.
  */
 export function parseCompilerOutput(text: string): CompilerOutput | null {
-  const stripped = stripCodeFence(text).trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch {
-    return null;
+  // Try the whole (fence-stripped) body first, then the first brace-balanced object —
+  // so a model that wraps its JSON in prose (common when json_object response_format is
+  // unavailable, e.g. after the Groq json_validate_failed fallback) still parses.
+  for (const candidate of [stripCodeFence(text).trim(), firstBalancedObject(text)]) {
+    if (!candidate) continue;
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as CompilerOutput;
+      }
+    } catch {
+      /* try the next candidate */
+    }
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return null;
-  }
-  return parsed as CompilerOutput;
+  return null;
 }
 
 function stripCodeFence(text: string): string {
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/m.exec(text.trim());
   return fence?.[1] ?? text;
+}
+
+/** The first brace-balanced JSON object substring (string-aware), or null. */
+function firstBalancedObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
 }

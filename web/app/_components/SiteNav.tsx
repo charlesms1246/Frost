@@ -15,7 +15,6 @@ export default function SiteNav({ active }: { active?: string }) {
     <nav className="bar">
       <Link className="brand" href="/">
         FROST
-        <small>BY PORT 42</small>
       </Link>
       <div className="nav-links">
         {LINKS.map((l) => (

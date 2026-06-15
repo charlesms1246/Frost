@@ -8,13 +8,14 @@
   import { profile } from "$lib/stores/profile.svelte";
   import { config } from "$lib/stores/config.svelte";
   import { grants, statusOf, type DelegationStatus } from "$lib/stores/grants.svelte";
-  import { signOut as performSignOut } from "$lib/sign-out";
+  import { signOut as performSignOut, revokeActiveGrant } from "$lib/sign-out";
   import { syncProfileToHosted, fileToDataUrl } from "$lib/profile-sync";
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import Camera from "@lucide/svelte/icons/camera";
   import Check from "@lucide/svelte/icons/check";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
+  import ShieldOff from "@lucide/svelte/icons/shield-off";
 
   let displayName = $state(profile.value.displayName);
   let email = $state(profile.value.email);
@@ -60,6 +61,39 @@
       status: statusOf(r, nowUnix),
     })),
   );
+
+  // --- Per-delegation revoke: kill one grant's authority from here. ---
+  let revokingId = $state<string | null>(null);
+  let revokeError = $state<string | null>(null);
+
+  async function revokeDelegation(d: Delegation) {
+    if (revokingId) return;
+    revokingId = d.id;
+    revokeError = null;
+    try {
+      // When this record is the live config grant, revoke it on-chain (MetaMask
+      // `disableDelegation` via the bridge) and clear the redeemable blob from config.
+      const live =
+        !!config.value.metaMaskGrant &&
+        !!d.delegate &&
+        d.delegate.toLowerCase() === config.value.sessionAccount?.toLowerCase();
+      if (live) {
+        await revokeActiveGrant();
+        config.update({
+          metaMaskGrant: undefined,
+          sessionAccount: undefined,
+          grantTokenAddress: undefined,
+          grantMaxAmount: undefined,
+          grantExpiryUnix: undefined,
+        });
+      }
+      grants.markRevokedById(d.id);
+    } catch (e) {
+      revokeError = e instanceof Error ? e.message : String(e);
+    } finally {
+      revokingId = null;
+    }
+  }
 
   let signingOut = $state(false);
   let signOutNote = $state("");
@@ -160,6 +194,11 @@
         <Card.Description>Scoped, revocable delegations from your wallet.</Card.Description>
       </Card.Header>
       <Card.Content class="min-h-0 flex-1 overflow-y-auto">
+        {#if revokeError}
+          <div class="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive">
+            Couldn't revoke: {revokeError}
+          </div>
+        {/if}
         {#if delegations.length === 0}
           <div class="flex h-full flex-col items-center justify-center gap-3 text-center">
             <p class="text-sm text-muted-foreground">No delegations granted yet.</p>
@@ -189,6 +228,18 @@
                     <dd class="text-right text-foreground">{new Date(d.expiryUnix * 1000).toLocaleDateString()}</dd>
                   {/if}
                 </dl>
+                {#if d.status === "active"}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="mt-2.5 h-7 w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onclick={() => revokeDelegation(d)}
+                    disabled={revokingId !== null}
+                  >
+                    {#if revokingId === d.id}<Loader2 class="size-3.5 animate-spin" />{:else}<ShieldOff class="size-3.5" />{/if}
+                    Revoke
+                  </Button>
+                {/if}
               </li>
             {/each}
           </ul>
