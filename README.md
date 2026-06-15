@@ -26,9 +26,6 @@ Frost is a desktop app where you describe an automated on-chain workflow in plai
 
 Built for the **MetaMask Smart Accounts Kit × 1Shot API × Venice AI Dev Cook-Off** . Running live on **Base Sepolia**.
 
-> ### ⚠️ Build size: ~11.1 GB
-> A full clone with every subproject's `node_modules` and the Rust/Foundry build artifacts is roughly **11.1 GB**. Clone deliberately, install per-subproject (not all at once), and see [Continuing development](#continuing-development) before you `npm install` anything.
-
 ---
 
 ## The Background
