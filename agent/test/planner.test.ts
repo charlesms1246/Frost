@@ -231,6 +231,20 @@ describe("Planner — T-35 graceful escalation", () => {
     expect(result.hitlReason).toMatch(/invalid amount/);
   });
 
+  it("truncates a decimal amount string instead of escalating", async () => {
+    // Real-world model divergence: an amount emitted as a decimal STRING ("0.5")
+    // rather than a base-unit integer. It must truncate (conservative) and approve,
+    // not blow up `BigInt()` and escalate the whole plan.
+    const transport = transportReturning(
+      plannerJson({ escalate: false, candidates: [pricer("pricer-uniswap", "0.5")] }),
+    );
+    const result = await makePlanner(transport).plan(baseInput());
+
+    expect(result.escalateToHITL).toBe(false);
+    expect(result.approved).toHaveLength(1);
+    expect(result.approved[0]!.proposedCaveats.spendCapTotal).toBe(0n);
+  });
+
   it("treats an empty no-op plan as success, not escalation", async () => {
     const transport = transportReturning(
       plannerJson({ escalate: false, candidates: [] }),

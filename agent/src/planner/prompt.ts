@@ -171,14 +171,21 @@ export function parsePlannerOutput(text: string): PlannerOutput | null {
 }
 
 /**
- * Normalize an amount field to a STRING. A NUMBER is coerced to its integer string
- * (the common model divergence we fix here); a STRING is passed through UNCHANGED so
- * the planner's downstream amount validation still rejects non-numeric strings with
- * its "invalid amount" reason. Missing / non-scalar ⇒ undefined (a structural error).
+ * Normalize an amount field to an integer base-unit STRING. A NUMBER is truncated to
+ * its integer string (the common model divergence). A STRING that is numeric — integer
+ * OR decimal (e.g. "0.5") — is truncated to its integer part: amounts are base-unit
+ * integers, and truncation only ever LOWERS authority, so it's the conservative fix
+ * (the signed bounds + the on-chain Mandate remain the real guard). A genuinely
+ * non-numeric string (e.g. "1e5", "ten") is passed through UNCHANGED so the planner's
+ * downstream `BigInt()` still rejects it with "invalid amount". Missing / non-scalar ⇒
+ * undefined (a structural error).
  */
 function asAmountString(v: unknown): string | undefined {
-  if (typeof v === "string") return v;
   if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v).toString();
+  if (typeof v === "string") {
+    const m = /^\s*(-?\d+)(?:\.\d+)?\s*$/.exec(v);
+    return m ? m[1] : v;
+  }
   return undefined;
 }
 
