@@ -102,6 +102,40 @@ describe("OpenRouterClient", () => {
     ).rejects.toBeInstanceOf(OpenRouterError);
   });
 
+  it("retries without response_format when a provider rejects json mode (Groq json_validate_failed)", async () => {
+    const bodies: string[] = [];
+    const responses = [
+      { ok: false, status: 400, body: JSON.stringify({ error: { code: "json_validate_failed", message: "Failed to validate JSON." } }) },
+      { ok: true, status: 200, body: JSON.stringify({ id: "x", model: "m", choices: [{ message: { content: "{\"ok\":true}" } }] }) },
+    ];
+    let call = 0;
+    const fetchImpl: FetchLike = async (_url, init) => {
+      bodies.push(init.body);
+      const r = responses[call++]!;
+      return { ok: r.ok, status: r.status, text: async () => r.body };
+    };
+    const client = new OpenRouterClient({ apiKey: "sk-test", model: "openai/gpt-oss-120b", fetchImpl });
+
+    const res = await client.complete({ model: "", messages: [{ role: "user", content: "hi" }], json: true });
+
+    expect(res.text).toBe('{"ok":true}');
+    expect(call).toBe(2); // first attempt 400'd, retried once
+    expect(JSON.parse(bodies[0]!).response_format).toEqual({ type: "json_object" }); // first asked for json mode
+    expect(JSON.parse(bodies[1]!).response_format).toBeUndefined(); // retry dropped the constraint
+  });
+
+  it("does not retry a 400 that is not json_validate_failed", async () => {
+    let call = 0;
+    const fetchImpl: FetchLike = async () => {
+      call++;
+      return { ok: false, status: 400, text: async () => JSON.stringify({ error: { code: "context_length_exceeded" } }) };
+    };
+    const client = new OpenRouterClient({ apiKey: "sk-test", model: "m", fetchImpl });
+
+    await expect(client.complete({ model: "", messages: [], json: true })).rejects.toBeInstanceOf(OpenRouterError);
+    expect(call).toBe(1); // no retry
+  });
+
   it("requires an apiKey", () => {
     expect(
       () =>

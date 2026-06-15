@@ -132,23 +132,36 @@ export class OpenRouterClient implements InferenceTransport {
   }
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
-    const body: Record<string, unknown> = {
+    const base: Record<string, unknown> = {
       model: req.model || this.model,
       messages: req.messages,
       temperature: req.temperature ?? 0,
     };
-    if (req.json) body["response_format"] = { type: "json_object" };
 
-    const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    const send = async (withJson: boolean) => {
+      const body = withJson ? { ...base, response_format: { type: "json_object" } } : base;
+      const r = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      return { status: r.status, ok: r.ok, raw: await r.text() };
+    };
 
-    const raw = await res.text();
+    let res = await send(!!req.json);
+    // Some providers reject `response_format: json_object` with a 400
+    // `json_validate_failed` (notably Groq's reasoning models, e.g. gpt-oss-120b,
+    // which emit reasoning instead of a clean JSON body). Our prompts already demand a
+    // single JSON object and the planner/compiler parsers tolerate fenced or embedded
+    // JSON — so drop the constraint and retry once rather than failing the whole cycle.
+    if (req.json && res.status === 400 && /json_validate_failed/.test(res.raw)) {
+      res = await send(false);
+    }
+
+    const raw = res.raw;
     if (!res.ok) {
       throw new OpenRouterError(
         `OpenRouter request failed (${res.status})`,
