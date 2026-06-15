@@ -690,6 +690,47 @@ footer.site .col strong { color: var(--ink); font-weight: 500; }
   max-width: 28ch;
 }
 
+/* ──────── screenshot showcase (detail stage) ──────── */
+.shot-showcase { margin: 0; width: 100%; display: flex; flex-direction: column; gap: 16px; }
+.shot-frame {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg-2);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 14px 36px -22px rgba(20,30,55,0.35);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.shot-showcase:hover .shot-frame {
+  transform: translateY(-2px);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.7) inset, 0 22px 48px -22px rgba(20,30,55,0.45);
+}
+.shot-img { display: block; width: 100%; aspect-ratio: 1366 / 768; object-fit: cover; }
+.shot-cap { display: flex; flex-direction: column; gap: 4px; padding: 0 4px; min-height: 48px; }
+.shot-cap-title {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.shot-cap-desc {
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+.shot-dots { display: flex; gap: 8px; padding: 2px 4px; }
+.shot-dot {
+  width: 7px; height: 7px; padding: 0;
+  border-radius: 50%; border: none; cursor: pointer;
+  background: var(--hair); opacity: 0.5;
+  transition: opacity .15s, background .15s, transform .15s;
+}
+.shot-dot:hover { opacity: 0.8; }
+.shot-dot.active { background: var(--accent); opacity: 1; transform: scale(1.15); }
+
 /* ──────── features grid ──────── */
 .features { margin-top: 96px; display: flex; flex-direction: column; gap: 32px; }
 .features-header { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: end; }
@@ -954,6 +995,11 @@ footer.site .col strong { color: var(--ink); font-weight: 500; }
 .platform-card.featured .dl-platform-btn { background: var(--accent); box-shadow: 0 8px 20px -10px oklch(0.55 0.14 235 / 0.5); }
 .dl-platform-btn:hover { transform: translateY(-1px); }
 .platform-card.featured .dl-platform-btn:hover { background: oklch(0.5 0.14 235); }
+.dl-btn-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+/* Per-binary buttons: format on the left, arch + size on the right. */
+.dl-asset-btn { justify-content: space-between; padding: 11px 16px; }
+.dl-asset-main { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; }
+.dl-asset-meta { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; opacity: 0.75; }
 .checksums { margin-top: 48px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); overflow: hidden; }
 .checksums-header {
   padding: 14px 20px; border-bottom: 1px solid var(--line);

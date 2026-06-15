@@ -10,6 +10,7 @@
 import Link from "next/link";
 import SiteNav from "../_components/SiteNav";
 import { useOS } from "../_lib/use-os";
+import { useRelease } from "../_lib/use-release";
 
 const DOWN_ICON = (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -22,20 +23,25 @@ const WIN_ICON = <img className="platform-icon" src="/Windows_logo.svg" alt="" a
 const LINUX_ICON = <img className="platform-icon" src="/Linux_Logo.svg" alt="" aria-hidden="true" />;
 
 const PLATFORMS = [
-  { key: "mac", name: "macOS", icon: MAC_ICON, formats: ["Apple Silicon", "Intel x64", ".dmg"], reqs: "macOS 12+ · ~95 MB", btn: "Download for macOS" },
-  { key: "windows", name: "Windows", icon: WIN_ICON, formats: ["x64", ".msi", ".exe"], reqs: "Windows 10 (1903)+ · ~110 MB", btn: "Download for Windows" },
-  { key: "linux", name: "Linux", icon: LINUX_ICON, formats: ["AppImage", ".deb", ".rpm"], reqs: "glibc 2.31+ · ~105 MB", btn: "Download for Linux" },
+  { key: "mac", name: "macOS", icon: MAC_ICON, formats: ["Apple Silicon", ".dmg", ".app"], reqs: "macOS 12+ · ~5 MB", btn: "Download for macOS" },
+  { key: "windows", name: "Windows", icon: WIN_ICON, formats: ["x64", ".msi", ".exe"], reqs: "Windows 10 (1903)+ · ~5 MB", btn: "Download for Windows" },
+  { key: "linux", name: "Linux", icon: LINUX_ICON, formats: ["AppImage", ".deb", ".rpm"], reqs: "glibc 2.31+ · 6–78 MB", btn: "Download for Linux" },
 ] as const;
 
+// Real SHA-256 sums for the published frost-v0.1.0 assets (GitHub Releases).
 const CHECKSUMS: [string, string][] = [
-  ["macOS ARM64", "a3f8d2c1b7e4f09a2d5c8b1e3f6a9d2c5b8e1f4a7d0c3b6e9f2a5d8c1b4e7f0"],
-  ["macOS x64", "d7e0a3f6b9c2e5a8d1f4c7b0e3a6d9f2c5b8e1a4d7f0c3b6a9e2d5f8c1b4e7a0"],
-  ["Windows x64", "b4c7a0d3f6e9b2a5c8f1d4e7a0b3f6c9d2e5b8f1a4c7d0e3b6a9f2c5d8e1b4f7"],
-  ["Linux AppImage", "e1b4f7c0a3d6e9f2b5c8d1a4f7e0b3d6c9a2e5f8b1d4a7f0e3b6d9c2a5f8e1b4"],
+  ["macOS aarch64 · .dmg", "388a70f93ae75919a6f49fdab6b31771f6ed42bee90c64f6413d317a63cf9e0a"],
+  ["macOS aarch64 · .app", "fcbcfb2a6dc56e126a2a95c2def7536f7f35149bff05ceab8543553acf9b72a2"],
+  ["Windows x64 · .msi", "8d6587e388b45308a6968923d7fcb3e25aedda5458407634da182ae3b64e8411"],
+  ["Windows x64 · .exe", "ee8391f70262b361e08c57ed52fb090f1eba820327ea98dbed19f5a2b88455c6"],
+  ["Linux x64 · AppImage", "aaf3b5024b4536ef759609b6de01961273d53c433a2b8bf94968e7b8284b58fe"],
+  ["Linux x64 · .deb", "db6c12718ac492eecc336ab066158bc54a6d19880398f2354bacad4026e214c1"],
+  ["Linux x64 · .rpm", "e58adb46b53863a3cedc75ab7c2dfbb8a4c0ea7a68d583cd8a56f16951fa5af2"],
 ];
 
 export default function DownloadPage() {
   const os = useOS();
+  const release = useRelease();
   const primaryKey = os === "other" ? "mac" : os;
   const ordered = [...PLATFORMS].sort(
     (a, b) => Number(b.key === primaryKey) - Number(a.key === primaryKey),
@@ -51,7 +57,7 @@ export default function DownloadPage() {
           <div className="eyebrow">Early Access · Free</div>
           <h1 className="dl-heading">Download <span>Frost</span> 1.0</h1>
           <p className="dl-desc">A native desktop app for macOS, Windows, and Linux. Built with Tauri 2 — lean, fast, fully offline-capable. Your keys never leave your machine.</p>
-          <div className="version-badge"><span className="live" />Build 0.5.0 · May 2026 · Tauri 2.0</div>
+          <div className="version-badge"><span className="live" />{release.version ? `${release.version} · ` : ""}Tauri 2.0 · GitHub Releases</div>
         </div>
 
         <div className="platforms">
@@ -63,7 +69,31 @@ export default function DownloadPage() {
                 <div className="platform-name">{p.name}</div>
                 <ul className="platform-formats">{p.formats.map((f) => <li key={f}>{f}</li>)}</ul>
                 <div className="platform-reqs">{p.reqs}</div>
-                <a className="dl-platform-btn" href="#">{DOWN_ICON}{p.btn}</a>
+                {release.assets[p.key].length > 0 ? (
+                  <div className="dl-btn-stack">
+                    {release.assets[p.key].map((a) => (
+                      <a
+                        key={a.name}
+                        className="dl-platform-btn dl-asset-btn"
+                        href={a.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <span className="dl-asset-main">{DOWN_ICON}{a.format}</span>
+                        <span className="dl-asset-meta">{a.label} · {a.size}</span>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <a
+                    className="dl-platform-btn"
+                    href={release.releaseUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {DOWN_ICON}{release.loading ? "Loading releases…" : p.btn}
+                  </a>
+                )}
               </div>
             );
           })}
