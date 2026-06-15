@@ -90,8 +90,16 @@ jobs:
           npm ci
           npm run build
 
-      # tauri-action installs frost's frontend deps, runs the beforeBuildCommand
-      # (vite build), then `tauri build`, and uploads the bundles to the release.
+      # tauri-action does NOT reliably install frost's own deps, so install them
+      # explicitly here. Without this the `tauri` CLI (a frost devDependency) is
+      # absent and `npm run tauri build` fails with "tauri: not found" (exit 127).
+      # Runs after sdk+agent are built because frost links them via file:.
+      - name: Install frost dependencies
+        working-directory: frost
+        run: npm ci
+
+      # tauri-action runs the beforeBuildCommand (vite build), then `tauri build`,
+      # and uploads the bundles to the release.
       - name: Build Tauri app and publish release
         uses: tauri-apps/tauri-action@v0
         env:

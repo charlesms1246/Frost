@@ -23,6 +23,13 @@ import {
   type VariableSource,
 } from "./types.js";
 
+/**
+ * Floor for `maxSubMandates`. A typical workflow spawns several specialists (monitor +
+ * pricer(s) + executor + comms), so a model/answer emitting fewer than this would yield
+ * a spec the planner can never satisfy. Explicit higher limits are always kept.
+ */
+const MIN_SUB_MANDATES = 5;
+
 export interface CompilerConfig {
   transport: InferenceTransport;
   /** Model id passed to the transport. */
@@ -205,6 +212,23 @@ export class Compiler {
         warnings,
         clarifications,
       );
+    }
+
+    // Floor maxSubMandates so a model that emits an absurdly-low value (0/1) — or a
+    // workflow that under-counts — can't produce a spec the planner can NEVER satisfy
+    // (it would reject every specialist agent for "maxSubMandates exceeded" and escalate
+    // the whole cycle). A typical workflow needs monitor + pricer(s) + executor + comms.
+    // Only RAISES sub-floor values; explicit higher limits are kept. Surfaced as an
+    // assumption for transparency (I-16 / T-30). Does NOT touch the budget, which a user
+    // may legitimately set below the session cap.
+    if (spec.redelegationBounds.maxSubMandates < MIN_SUB_MANDATES) {
+      const was = spec.redelegationBounds.maxSubMandates;
+      spec.redelegationBounds.maxSubMandates = MIN_SUB_MANDATES;
+      assumptions.push({
+        field: "maxSubMandates",
+        assumed: `${MIN_SUB_MANDATES}`,
+        note: `raised from ${was} so the planner can spawn the workflow's specialist agents (monitor, pricer, executor, comms)`,
+      });
     }
 
     // Required fields the model couldn't determine and the user hasn't answered.

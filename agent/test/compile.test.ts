@@ -84,6 +84,23 @@ describe("Compiler — paranoid defaults", () => {
   });
 });
 
+describe("Compiler — maxSubMandates floor", () => {
+  it("raises an absurdly-low maxSubMandates to the floor and records an assumption", async () => {
+    const c = makeCompiler(transportReturning(compilerJson({ maxSubMandates: 1 })));
+    const r = await c.compile({ description: DESC });
+
+    expect(r.spec.redelegationBounds.maxSubMandates).toBe(5);
+    expect(r.assumptions.map((a) => a.field)).toContain("maxSubMandates");
+  });
+
+  it("keeps an explicit maxSubMandates above the floor", async () => {
+    const c = makeCompiler(transportReturning(compilerJson({ maxSubMandates: 8 })));
+    const r = await c.compile({ description: DESC });
+
+    expect(r.spec.redelegationBounds.maxSubMandates).toBe(8);
+  });
+});
+
 describe("Compiler — clarifications", () => {
   it("emits a clarification for a model-flagged missing field, then resolves it via answers", async () => {
     const out = compilerJson({
