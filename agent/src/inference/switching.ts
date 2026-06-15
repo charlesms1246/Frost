@@ -22,6 +22,7 @@ import type {
   InferenceTransport,
   CompletionRequest,
   CompletionResponse,
+  TokenUsage,
 } from "./openrouter.js";
 
 export type InferenceProvider = "primary" | "fallback";
@@ -40,6 +41,10 @@ export interface RouteInfo {
   primaryCallBudget: number;
   /** Present only when `reason === "primary-error-fallback"`. */
   primaryError?: string;
+  /** The model that served this call (when known). */
+  model?: string;
+  /** Token/cost usage for this call, when the provider emitted it. */
+  usage?: TokenUsage;
 }
 
 export interface SwitchingConfig {
@@ -99,29 +104,44 @@ export class SwitchingInferenceTransport implements InferenceTransport {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     if (!this.enabled) {
-      this.report("fallback", "disabled");
-      return this.fallback.complete(req);
+      return this.serve(this.fallback, req, "fallback", "disabled");
     }
     if (this.used >= this.budget) {
-      this.report("fallback", "budget-exhausted");
-      return this.fallback.complete(req);
+      return this.serve(this.fallback, req, "fallback", "budget-exhausted");
     }
 
     // Routing to primary consumes a budget slot up front (conservative).
     this.used += 1;
     try {
       const out = await this.primary.complete(req);
-      this.report("primary", "primary");
+      this.report("primary", "primary", out);
       return out;
     } catch (err) {
       if (!this.fallbackOnError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      this.report("fallback", "primary-error-fallback", message);
-      return this.fallback.complete(req);
+      return this.serve(this.fallback, req, "fallback", "primary-error-fallback", message);
     }
   }
 
-  private report(provider: InferenceProvider, reason: RouteReason, primaryError?: string): void {
+  /** Serve via a transport, then report the route WITH the served call's model + usage. */
+  private async serve(
+    transport: InferenceTransport,
+    req: CompletionRequest,
+    provider: InferenceProvider,
+    reason: RouteReason,
+    primaryError?: string,
+  ): Promise<CompletionResponse> {
+    const out = await transport.complete(req);
+    this.report(provider, reason, out, primaryError);
+    return out;
+  }
+
+  private report(
+    provider: InferenceProvider,
+    reason: RouteReason,
+    out?: CompletionResponse,
+    primaryError?: string,
+  ): void {
     if (!this.onRoute) return;
     const info: RouteInfo = {
       provider,
@@ -130,6 +150,8 @@ export class SwitchingInferenceTransport implements InferenceTransport {
       primaryCallBudget: this.budget,
     };
     if (primaryError !== undefined) info.primaryError = primaryError;
+    if (out?.model) info.model = out.model;
+    if (out?.usage) info.usage = out.usage;
     this.onRoute(info);
   }
 }

@@ -23,6 +23,7 @@ import type {
   CompletionResponse,
   FetchLike,
 } from "./openrouter.js";
+import { parseUsage } from "./openrouter.js";
 
 export interface VeniceInferenceConfig {
   apiKey: string;
@@ -115,10 +116,12 @@ export class VeniceInferenceClient implements InferenceTransport {
       );
     }
 
+    const usage = parseUsage(data);
     return {
       text,
       model: data.model ?? (req.model || this.model),
       id: data.id ?? "",
+      ...(usage ? { usage } : {}),
     };
   }
 }

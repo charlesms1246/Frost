@@ -25,6 +25,15 @@ export interface CompletionRequest {
   json?: boolean;
 }
 
+/** Token + cost accounting, when the provider emits it (OpenAI-style `usage`). */
+export interface TokenUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  /** USD cost, when the provider reports it (OpenRouter `usage.cost`). */
+  costUsd?: number;
+}
+
 export interface CompletionResponse {
   /** The assistant message content. */
   text: string;
@@ -32,6 +41,29 @@ export interface CompletionResponse {
   model: string;
   /** Generation id — used as the PlanningEntry `inferenceCallId` cross-reference. */
   id: string;
+  /** Token/cost usage, when the provider emits it. */
+  usage?: TokenUsage;
+}
+
+/**
+ * Pull OpenAI-style `usage` (+ OpenRouter `usage.cost`) out of a completion body.
+ * Returns undefined when the provider emitted no usable usage, so callers can add the
+ * field conditionally (exactOptionalPropertyTypes).
+ */
+export function parseUsage(data: unknown): TokenUsage | undefined {
+  const u = (data as { usage?: Record<string, unknown> } | null)?.usage;
+  if (!u || typeof u !== "object") return undefined;
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const out: TokenUsage = {};
+  const pt = num(u["prompt_tokens"]);
+  const ct = num(u["completion_tokens"]);
+  const tt = num(u["total_tokens"]);
+  const cost = num(u["cost"]) ?? num((u["cost_details"] as Record<string, unknown> | undefined)?.["upstream_inference_cost"]);
+  if (pt !== undefined) out.promptTokens = pt;
+  if (ct !== undefined) out.completionTokens = ct;
+  if (tt !== undefined) out.totalTokens = tt;
+  if (cost !== undefined) out.costUsd = cost;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** The minimal inference surface the planner needs. */
@@ -150,10 +182,12 @@ export class OpenRouterClient implements InferenceTransport {
       );
     }
 
+    const usage = parseUsage(data);
     return {
       text,
       model: data.model ?? (req.model || this.model),
       id: data.id ?? "",
+      ...(usage ? { usage } : {}),
     };
   }
 }

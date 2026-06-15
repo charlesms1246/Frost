@@ -241,4 +241,22 @@ describe("Planner — T-35 graceful escalation", () => {
     expect(result.approved).toHaveLength(0);
     expect(result.entry.candidatesConsidered).toHaveLength(0);
   });
+
+  it("approves a candidate that omits estimatedTokenCost (defaults to 0)", async () => {
+    // Real-world llama-3.3-70b output: a valid plan whose candidates drop the
+    // estimatedTokenCost estimate. It must approve, not escalate.
+    const transport = transportReturning(
+      plannerJson({
+        escalate: false,
+        candidates: [
+          { role: "pricer-uniswap", capabilities: ["CAP_RPC_READ"], spendCapTotal: "1000000", reasoning: "fetch WETH/USDC price" },
+        ],
+      }),
+    );
+    const result = await makePlanner(transport).plan(baseInput());
+
+    expect(result.escalateToHITL).toBe(false);
+    expect(result.approved).toHaveLength(1);
+    expect(result.approved[0]?.role).toBe("pricer-uniswap");
+  });
 });
