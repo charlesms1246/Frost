@@ -1097,7 +1097,7 @@
 
   <!-- RIGHT: run controls + telemetry -->
   <aside class="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-2xl border bg-card/70 p-3 backdrop-blur-xl">
-    <!-- Run controls: executor + paid inference. -->
+    <!-- Run controls: executor. -->
     <section class="flex flex-col gap-2">
       <h2 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Controls</h2>
 
@@ -1116,15 +1116,6 @@
           <input id="notional" type="number" min="0" step="0.01" class="h-8 rounded-md border bg-input/30 px-2 text-xs" bind:value={execNotionalStr} />
         </div>
       </div>
-
-      {#if config.value.veniceApiKey}
-        <div class="rounded-xl border bg-background/40 p-3 text-xs">
-          <p class="font-medium">Paid inference (Venice x402)</p>
-          <p class="text-[10px] text-muted-foreground">
-            {store.routes.venice} paid · {store.routes.openrouter} fallback — toggle in the title bar
-          </p>
-        </div>
-      {/if}
     </section>
 
     <section>

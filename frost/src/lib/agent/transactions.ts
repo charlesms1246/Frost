@@ -46,6 +46,22 @@ type RawTx = {
 
 type ScanResponse = { status?: string; message?: string; result?: unknown };
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// The Etherscan free tier caps requests/sec (this key: 3/sec). The Wallet page fires
+// up to 4 calls at once (txlist + tokentx × 2 wallets), so funnel EVERY explorer call
+// through a serial queue spaced ≥ MIN_GAP_MS — at most ~2-3 starts per second.
+const MIN_GAP_MS = 400;
+let queue: Promise<unknown> = Promise.resolve();
+function throttled<T>(fn: () => Promise<T>): Promise<T> {
+  const result = queue.then(fn);
+  queue = result.then(
+    () => sleep(MIN_GAP_MS),
+    () => sleep(MIN_GAP_MS),
+  );
+  return result;
+}
+
 function directionOf(address: string, from?: string, to?: string): WalletTx["direction"] {
   const a = address.toLowerCase();
   const f = (from ?? "").toLowerCase();
@@ -62,13 +78,21 @@ function prettyMethod(functionName?: string, value?: string): string {
 }
 
 async function fetchList(f: TxFetch, url: string): Promise<RawTx[]> {
-  const res = await f(url);
-  if (!res.ok) throw new Error(`explorer ${res.status}`);
-  const body = (await res.json()) as ScanResponse;
-  if (body.status === "1" && Array.isArray(body.result)) return body.result as RawTx[];
-  // status "0" + "No transactions found" is an empty (non-error) result.
-  if (body.status === "0" && /no transactions/i.test(body.message ?? "")) return [];
-  throw new Error(typeof body.result === "string" ? body.result : body.message || "explorer error");
+  for (let attempt = 0; ; attempt++) {
+    const res = await throttled(() => f(url));
+    if (!res.ok) throw new Error(`explorer ${res.status}`);
+    const body = (await res.json()) as ScanResponse;
+    if (body.status === "1" && Array.isArray(body.result)) return body.result as RawTx[];
+    // status "0" + "No transactions found" is an empty (non-error) result.
+    if (body.status === "0" && /no transactions/i.test(body.message ?? "")) return [];
+    const msg = typeof body.result === "string" ? body.result : body.message || "explorer error";
+    // The per-sec cap can still bite under bursty load — back off and retry a few times.
+    if (/rate limit/i.test(msg) && attempt < 3) {
+      await sleep(600 * (attempt + 1));
+      continue;
+    }
+    throw new Error(msg);
+  }
 }
 
 /**

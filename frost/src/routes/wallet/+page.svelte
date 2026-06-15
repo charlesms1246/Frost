@@ -13,7 +13,6 @@
   import { fetchTransactions, type WalletTx } from "$lib/agent/transactions";
   import type { Address } from "viem";
   import Wallet from "@lucide/svelte/icons/wallet";
-  import ArrowLeftRight from "@lucide/svelte/icons/arrow-left-right";
   import ArrowDownLeft from "@lucide/svelte/icons/arrow-down-left";
   import ArrowUpRight from "@lucide/svelte/icons/arrow-up-right";
   import Fingerprint from "@lucide/svelte/icons/fingerprint";
@@ -108,6 +107,15 @@
   async function refresh() {
     await Promise.all([loadBalances(), loadTxns()]);
   }
+
+  // Right column shows ONE panel at a time (tabbed) so each fills the full height
+  // instead of stacking and compressing the chart.
+  type RightTab = "market" | "txns";
+  let rightTab = $state<RightTab>("market");
+  const RIGHT_TABS: { id: RightTab; label: string }[] = [
+    { id: "market", label: "Market" },
+    { id: "txns", label: "Transactions" },
+  ];
 
   // --- Market: live OHLC candles for a selected major token + timeframe ---
   let chartSymbol = $state<string>("ETH");
@@ -225,51 +233,62 @@
       {@render walletCard("Signing wallet", Wallet, "The agent's custodial 1Shot wallet.", signAddr, "Not provisioned yet.")}
     </div>
 
-    <!-- RIGHT -->
-    <div class="grid min-h-0 grid-rows-[1fr_auto] gap-4">
-      <Card.Root class="flex min-h-0 flex-col">
-        <Card.Header class="gap-3 pb-2">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="flex items-baseline gap-3">
-              <Card.Title class="text-base">{chartSymbol} / USD</Card.Title>
-              {#if lastPrice !== undefined}
-                <span class="font-mono text-lg font-semibold tabular-nums">{fmtUsd(lastPrice)}</span>
-                {#if change !== undefined}
-                  <span class="text-xs font-medium {change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}">
-                    {change >= 0 ? "+" : ""}{change.toFixed(2)}%
-                  </span>
-                {/if}
-              {/if}
-            </div>
-            <div class="flex items-center gap-1">
-              {#each CHARTABLE as sym (sym)}
-                <Button variant={chartSymbol === sym ? "default" : "ghost"} size="sm" class="h-7 px-2 text-xs" onclick={() => (chartSymbol = sym)}>{sym}</Button>
-              {/each}
-              <span class="mx-1 h-4 w-px bg-border"></span>
-              {#each TIMEFRAMES as tf (tf.days)}
-                <Button variant={days === tf.days ? "secondary" : "ghost"} size="sm" class="h-7 px-2 text-xs" onclick={() => (days = tf.days)}>{tf.label}</Button>
-              {/each}
-            </div>
+    <!-- RIGHT: one full-height card; tabs switch between the market chart and the
+         transaction list so each fills the column instead of stacking + compressing. -->
+    <div class="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
+      <div class="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <div class="flex gap-1">
+          {#each RIGHT_TABS as tab (tab.id)}
+            <button
+              type="button"
+              class="rounded-md px-3 py-1 text-xs font-medium transition-colors {rightTab === tab.id
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent/50'}"
+              onclick={() => (rightTab = tab.id)}
+            >
+              {tab.label}
+            </button>
+          {/each}
+        </div>
+        {#if rightTab === "market"}
+          <div class="flex items-center gap-1">
+            {#each CHARTABLE as sym (sym)}
+              <Button variant={chartSymbol === sym ? "default" : "ghost"} size="sm" class="h-7 px-2 text-xs" onclick={() => (chartSymbol = sym)}>{sym}</Button>
+            {/each}
+            <span class="mx-1 h-4 w-px bg-border"></span>
+            {#each TIMEFRAMES as tf (tf.days)}
+              <Button variant={days === tf.days ? "secondary" : "ghost"} size="sm" class="h-7 px-2 text-xs" onclick={() => (days = tf.days)}>{tf.label}</Button>
+            {/each}
           </div>
-          <Card.Description class="text-xs">Live OHLC from public market data — the real-time price the pricer agents track.</Card.Description>
-        </Card.Header>
-        <Card.Content class="min-h-0 flex-1">
-          {#if candlesErr}
-            <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Couldn't load market data.</div>
-          {:else if candles.length === 0}
-            <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Loading {chartSymbol} candles…</div>
-          {:else}
-            <div class="h-full min-h-[240px]"><CandleChart {candles} /></div>
-          {/if}
-        </Card.Content>
-      </Card.Root>
+        {/if}
+      </div>
 
-      <Card.Root>
-        <Card.Header class="pb-2">
-          <Card.Title class="flex items-center gap-2 text-base"><ArrowLeftRight class="size-4 text-primary" /> Recent transactions</Card.Title>
-          <Card.Description class="text-xs">Your delegated-authority wallet and the agent's signing wallet, on Base Sepolia.</Card.Description>
-        </Card.Header>
-        <Card.Content class="max-h-72 overflow-y-auto">
+      {#if rightTab === "market"}
+        <div class="flex min-h-0 flex-1 flex-col p-4">
+          <div class="mb-2 flex flex-wrap items-baseline gap-3">
+            <span class="text-base font-semibold">{chartSymbol} / USD</span>
+            {#if lastPrice !== undefined}
+              <span class="font-mono text-lg font-semibold tabular-nums">{fmtUsd(lastPrice)}</span>
+              {#if change !== undefined}
+                <span class="text-xs font-medium {change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}">
+                  {change >= 0 ? "+" : ""}{change.toFixed(2)}%
+                </span>
+              {/if}
+            {/if}
+            <span class="ml-auto text-xs text-muted-foreground">Live OHLC — the price the pricer agents track.</span>
+          </div>
+          <div class="min-h-0 flex-1">
+            {#if candlesErr}
+              <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Couldn't load market data.</div>
+            {:else if candles.length === 0}
+              <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Loading {chartSymbol} candles…</div>
+            {:else}
+              <div class="h-full min-h-[240px]"><CandleChart {candles} /></div>
+            {/if}
+          </div>
+        </div>
+      {:else}
+        <div class="min-h-0 flex-1 overflow-y-auto p-4">
           {#if txError}
             <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               Couldn't load transactions: {txError}
@@ -311,8 +330,8 @@
               {/each}
             </ul>
           {/if}
-        </Card.Content>
-      </Card.Root>
+        </div>
+      {/if}
     </div>
   </div>
 </div>
